@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 
 #include "macro.h"
 #include "time-util.h"
+#include "user-util.h"
 
 typedef enum OomdReporterKind {
         OOMD_REPORTER_USER_MANAGER,
