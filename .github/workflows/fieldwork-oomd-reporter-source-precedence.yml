@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/fieldwork-oomd-reporter-source-precedence.yml"
       - "tools/fieldwork-apply-oomd-reporter-source-precedence.py"
+      - "tools/fieldwork-apply-oomd-reporter-source-precedence-v2.py"
       - "tools/fieldwork-inject-oomd-reporter-collision.py"
       - "src/oom/oomd-manager.c"
       - "src/oom/oomd-manager.h"
@@ -62,8 +63,9 @@ jobs:
           mkdir -p evidence
           python3 -m py_compile \
             tools/fieldwork-apply-oomd-reporter-source-precedence.py \
+            tools/fieldwork-apply-oomd-reporter-source-precedence-v2.py \
             tools/fieldwork-inject-oomd-reporter-collision.py
-          python3 tools/fieldwork-apply-oomd-reporter-source-precedence.py .
+          python3 tools/fieldwork-apply-oomd-reporter-source-precedence-v2.py .
           python3 tools/fieldwork-inject-oomd-reporter-collision.py \
             test/units/TEST-55-OOMD.sh
           bash -n test/units/TEST-55-OOMD.sh
