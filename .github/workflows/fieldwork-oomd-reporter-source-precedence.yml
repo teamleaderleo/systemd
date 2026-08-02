@@ -26,15 +26,27 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   source-precedence-vm:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Check out exact controlled-fork head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Verify direct execution identity
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          printf 'expected=%s\nactual=%s\n' "$EXPECTED_HEAD" "$actual"
+          test "$actual" = "$EXPECTED_HEAD"
 
       - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
 
@@ -77,6 +89,10 @@ jobs:
           git diff -- src/oom/oomd-manager.c src/oom/oomd-manager.h \
             test/units/TEST-55-OOMD.sh >evidence/product-and-regressions.diff
           grep -F 'MANAGED_OOM_REPORTER_SYSTEM' src/oom/oomd-manager.c
+          grep -F 'Stage effective state while the old source contribution is still present' \
+            src/oom/oomd-manager.c
+          grep -F 'Publish contribution and effective state as one transaction' \
+            src/oom/oomd-manager.c
           grep -F 'testcase_user_manager_reload_preserves_system_oomd_registration()' \
             test/units/TEST-55-OOMD.sh
           grep -F 'testcase_managed_oom_reporter_source_precedence()' \
@@ -203,11 +219,13 @@ jobs:
 
           test_status = int(sys.argv[1])
           outcome = sys.argv[2]
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          expected = os.environ["EXPECTED_HEAD"]
+          if head != expected:
+              raise SystemExit(f"execution identity mismatch: {head} != {expected}")
           record = {
-              "schema_version": 2,
-              "source_head": subprocess.check_output(
-                  ["git", "rev-parse", "HEAD"], text=True
-              ).strip(),
+              "schema_version": 3,
+              "controlled_fork_head": head,
               "github_sha": os.environ["GITHUB_SHA"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
@@ -219,11 +237,16 @@ jobs:
               "test_exit_status": test_status,
               "outcome": outcome,
               "product_source_changed": True,
+              "atomic_source_effective_updates": True,
+              "execution_identity": "direct-controlled-fork-head",
               "prototype_scope": (
                   "system/user source contributions, system precedence, "
-                  "and lower-authority reveal on withdrawal"
+                  "lower-authority reveal on withdrawal, and atomic recomputation"
               ),
-              "known_follow_up": "withdraw contributions on reporter disconnect",
+              "known_follow_up": (
+                  "replace connection generations through authoritative initial snapshots, "
+                  "then withdraw current authority on disconnect"
+              ),
               "external_contact": False,
           }
           pathlib.Path("evidence/receipt.json").write_text(
