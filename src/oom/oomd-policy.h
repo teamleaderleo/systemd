@@ -73,5 +73,11 @@ int oomd_policy_store_get_effective(
 size_t oomd_policy_store_size(const OomdPolicyStore *store);
 
 DEFINE_TRIVIAL_CLEANUP_FUNC(OomdPolicyStore*, oomd_policy_store_free);
-DEFINE_TRIVIAL_CLEANUP_FUNC(OomdPolicyValue*, oomd_policy_value_done);
-DEFINE_TRIVIAL_CLEANUP_FUNC(OomdPolicyDecision*, oomd_policy_decision_done);
+
+static inline void oomd_policy_value_donep(OomdPolicyValue *value) {
+        oomd_policy_value_done(value);
+}
+
+static inline void oomd_policy_decision_donep(OomdPolicyDecision *decision) {
+        oomd_policy_decision_done(decision);
+}
