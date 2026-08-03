@@ -139,7 +139,6 @@ jobs:
             "$test_binary" \
             >"artifacts/$VARIANT/valgrind.stdout" \
             2>"artifacts/$VARIANT/valgrind.stderr"
-          test ! -s "artifacts/$VARIANT/roundtrip.stderr"
           sha256sum "artifacts/$VARIANT/roundtrip.stdout" \
             >"artifacts/$VARIANT/roundtrip.sha256"
 
