@@ -38,9 +38,9 @@ static void populate_context(ExecContext *c) {
         assert(c);
 
         exec_context_init(c);
-        c->bind_mounts = new0(BindMount, 6);
+        c->bind_mounts = new0(BindMount, 8);
         ASSERT_NOT_NULL(c->bind_mounts);
-        c->n_bind_mounts = 6;
+        c->n_bind_mounts = 8;
 
         bind_mount_set(&c->bind_mounts[0],
                        "/tmp/plain-source",
@@ -77,6 +77,18 @@ static void populate_context(ExecContext *c) {
                        "/tmp/destination\\with\\backslash",
                        /* read_only= */ true,
                        /* recursive= */ false,
+                       /* ignore_enoent= */ false);
+        bind_mount_set(&c->bind_mounts[6],
+                       "/tmp/source\twith\ttab",
+                       "/tmp/destination\twith\ttab",
+                       /* read_only= */ false,
+                       /* recursive= */ false,
+                       /* ignore_enoent= */ true);
+        bind_mount_set(&c->bind_mounts[7],
+                       "/tmp/source\nwith\nnewline",
+                       "/tmp/destination\nwith\nnewline",
+                       /* read_only= */ true,
+                       /* recursive= */ true,
                        /* ignore_enoent= */ false);
 }
 
@@ -192,6 +204,8 @@ TEST(bind_mount_serialization_roundtrip) {
         ASSERT_NOT_NULL(strstr(serialized, "exec-context-bind-read-only-path="));
         ASSERT_NOT_NULL(strstr(serialized, "norbind"));
         ASSERT_NOT_NULL(strstr(serialized, "rbind"));
+        ASSERT_NOT_NULL(strstr(serialized, "\\t"));
+        ASSERT_NOT_NULL(strstr(serialized, "\\n"));
 
         deserialize_context(serialized, &restored);
         assert_context_equal(&original, &restored);
