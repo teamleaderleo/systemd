@@ -149,4 +149,25 @@ TEST(equal_rank_different_user_authorities_are_ambiguous) {
         ASSERT_ERROR(oomd_policy_store_get_effective(store, OOMD_POLICY_MEMORY_PRESSURE, PATH, &decision), ENOTUNIQ);
 }
 
+TEST(higher_rank_policy_resolves_earlier_user_ambiguity) {
+        _cleanup_(oomd_policy_decision_donep) OomdPolicyDecision decision = {};
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        OomdReporterAuthority other = {
+                .kind = OOMD_REPORTER_USER_MANAGER,
+                .uid = 4712,
+        };
+        OomdPolicyValue first_user = { .pressure_limit = 7000 };
+        OomdPolicyValue second_user = { .pressure_limit = 6000 };
+        OomdPolicyValue system = { .pressure_limit = 5000 };
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_OK(oomd_policy_store_update(store, user_authority, OOMD_POLICY_MEMORY_PRESSURE, PATH, &first_user));
+        ASSERT_OK(oomd_policy_store_update(store, other, OOMD_POLICY_MEMORY_PRESSURE, PATH, &second_user));
+        ASSERT_OK(oomd_policy_store_update(store, system_authority, OOMD_POLICY_MEMORY_PRESSURE, PATH, &system));
+        ASSERT_EQ(oomd_policy_store_get_effective(store, OOMD_POLICY_MEMORY_PRESSURE, PATH, &decision), 1);
+        ASSERT_EQ(decision.authority.kind, OOMD_REPORTER_SYSTEM_MANAGER);
+        ASSERT_EQ(decision.authority.uid, 0U);
+        ASSERT_EQ(decision.value.pressure_limit, 5000U);
+}
+
 DEFINE_TEST_MAIN(LOG_DEBUG);
