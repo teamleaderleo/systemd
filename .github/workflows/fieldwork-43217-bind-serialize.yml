@@ -83,6 +83,7 @@ jobs:
           EOF
 
           mkdir -p "artifacts/$VARIANT"
+          git -C product add -N src/test/test-execute-bind-serialize.c
           git -C product diff --check
           git -C product diff --name-only | sort >"artifacts/$VARIANT/changed-files.txt"
           cat >"artifacts/$VARIANT/expected-files.txt" <<'EOF'
