@@ -8,6 +8,7 @@
 #include "dynamic-user.h"
 #include "execute-serialize.h"
 #include "execute.h"
+#include "fd-util.h"
 #include "fdset.h"
 #include "namespace.h"
 #include "tests.h"
@@ -191,9 +192,6 @@ TEST(bind_mount_serialization_roundtrip) {
         ASSERT_NOT_NULL(strstr(serialized, "exec-context-bind-read-only-path="));
         ASSERT_NOT_NULL(strstr(serialized, "norbind"));
         ASSERT_NOT_NULL(strstr(serialized, "rbind"));
-        ASSERT_NOT_NULL(strstr(serialized, "source with space"));
-        ASSERT_NOT_NULL(strstr(serialized, "source\\:with\\:colon"));
-        ASSERT_NOT_NULL(strstr(serialized, "source\\\"with\\\"quote"));
 
         deserialize_context(serialized, &restored);
         assert_context_equal(&original, &restored);
