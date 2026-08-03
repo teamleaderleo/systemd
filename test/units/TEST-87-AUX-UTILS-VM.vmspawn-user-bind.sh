@@ -48,6 +48,7 @@ if [[ -z "$KERNEL" ]]; then
     exit 0
 fi
 
+TEST_UID="$(id -u testuser)"
 MACHINE="test-vmspawn-user-bind-$$"
 WORKDIR="$(mktemp -d /tmp/test-vmspawn-user-bind.XXXXXXXXXX)"
 LOG="$WORKDIR/vmspawn.log"
@@ -68,7 +69,7 @@ at_exit() {
 trap at_exit EXIT
 
 loginctl enable-linger testuser
-systemctl start user@4711.service
+systemctl start "user@${TEST_UID}.service"
 
 chown testuser:testuser "$WORKDIR"
 runas testuser mkdir "$WORKDIR/share"
@@ -90,7 +91,6 @@ runas testuser timeout --signal=TERM --kill-after=5s 8s \
     --ram=256M \
     --kvm=no \
     --vsock=no \
-    --network=no \
     --image="$WORKDIR/root.raw" \
     --image-format=raw \
     --linux="$KERNEL" \
