@@ -149,11 +149,13 @@ static int append_copy(
                 size_t *n_items,
                 const OomdPolicyContribution *source) {
 
+        int r;
+
         assert(items || capacity == 0);
         assert(n_items);
         assert(*n_items < capacity);
 
-        int r = contribution_copy(items + *n_items, source);
+        r = contribution_copy(items + *n_items, source);
         if (r < 0)
                 return r;
 
@@ -303,7 +305,8 @@ int oomd_policy_store_get_effective(
                 OomdPolicyDecision *ret) {
 
         const OomdPolicyContribution *selected = NULL;
-        int r;
+        bool ambiguous = false;
+        int r, selected_rank = -1;
 
         assert(store);
         assert(ret);
@@ -312,21 +315,27 @@ int oomd_policy_store_get_effective(
                 return -EINVAL;
 
         FOREACH_ARRAY(item, store->items, store->n_items) {
+                int rank;
+
                 if (item->property != property || !streq(item->path, path))
                         continue;
 
-                if (!selected || reporter_rank(item->authority.kind) > reporter_rank(selected->authority.kind)) {
+                rank = reporter_rank(item->authority.kind);
+                if (!selected || rank > selected_rank) {
                         selected = item;
+                        selected_rank = rank;
+                        ambiguous = false;
                         continue;
                 }
 
-                if (reporter_rank(item->authority.kind) == reporter_rank(selected->authority.kind) &&
-                    item->authority.uid != selected->authority.uid)
-                        return -ENOTUNIQ;
+                if (rank == selected_rank && item->authority.uid != selected->authority.uid)
+                        ambiguous = true;
         }
 
         if (!selected)
                 return 0;
+        if (ambiguous)
+                return -ENOTUNIQ;
 
         *ret = (OomdPolicyDecision) { .authority = selected->authority };
         r = value_copy(&ret->value, &selected->value);
