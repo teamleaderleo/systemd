@@ -267,8 +267,8 @@ int oomd_policy_store_replace_snapshot(
         }
 
         FOREACH_ARRAY(entry, entries, n_entries) {
-                FOREACH_ARRAY(existing, candidate + keep, n_candidate - keep)
-                        if (existing->property == entry->property && streq(existing->path, entry->path)) {
+                for (size_t i = keep; i < n_candidate; i++)
+                        if (candidate[i].property == entry->property && streq(candidate[i].path, entry->path)) {
                                 r = -EEXIST;
                                 goto fail;
                         }
