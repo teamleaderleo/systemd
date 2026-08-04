@@ -139,11 +139,11 @@ jobs:
             -Dbpf-framework=disabled \
             build
 
-      - name: Compile systemd-oomd
+      - name: Compile focused OOMD targets
         run: |
           set -o pipefail
-          sudo mkosi box -- meson compile -C build systemd-oomd \
-            |& tee evidence/compile-systemd-oomd.txt
+          sudo mkosi box -- meson compile -C build systemd-oomd test-oomd-util \
+            |& tee evidence/compile-oomd-targets.txt
 
       - name: Run existing OOMD unit test
         run: |
