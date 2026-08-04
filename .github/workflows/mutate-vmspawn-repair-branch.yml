@@ -25,7 +25,7 @@ jobs:
           ref: repair/vmspawn-unmapped-bind-userns-2dd0706
           fetch-depth: 0
 
-      - name: Apply exact source guard
+      - name: Apply bounded source guard
         shell: bash
         run: |
           set -euo pipefail
@@ -34,17 +34,22 @@ jobs:
 
           path = Path('src/vmspawn/vmspawn.c')
           text = path.read_text()
-          old = '''                r = namespace_enter(
-                                  /* pidns_fd= */ -EBADF,
-                                  /* mntns_fd= */ -EBADF,
-                                  /* netns_fd= */ -EBADF,
-                                  userns_fd,
-                                  /* root_fd= */ -EBADF);
-                  if (r < 0) {
-                          log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
-                          _exit(EXIT_FAILURE);
-                  }
-          '''
+
+          function_start = text.index('static int start_virtiofsd(')
+          start = text.index('                r = namespace_enter(\n', function_start)
+          end_marker = '\n                if (userns_fd >= 0 && unshare(CLONE_NEWNS) < 0) {'
+          end = text.index(end_marker, start)
+          old = text[start:end]
+
+          required = (
+              'userns_fd,',
+              'Failed to enter user namespace for virtiofsd: %m',
+              '_exit(EXIT_FAILURE);',
+          )
+          missing = [item for item in required if item not in old]
+          if missing:
+              raise SystemExit(f'unexpected namespace-entry block; missing {missing!r}')
+
           new = '''                if (userns_fd >= 0) {
                           r = namespace_enter(
                                           /* pidns_fd= */ -EBADF,
@@ -57,11 +62,9 @@ jobs:
                                   _exit(EXIT_FAILURE);
                           }
                   }
-          '''
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'expected one namespace-entry block, found {count}')
-          path.write_text(text.replace(old, new, 1))
+          '''.rstrip('\n')
+
+          path.write_text(text[:start] + new + text[end:])
           PY
 
           bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
