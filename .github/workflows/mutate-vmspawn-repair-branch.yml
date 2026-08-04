@@ -1,4 +1,4 @@
-name: Apply vmspawn repair to controlled branch
+name: Finalize vmspawn repair branch
 
 on:
   pull_request:
@@ -11,12 +11,12 @@ permissions:
   contents: write
 
 jobs:
-  mutate-repair-branch:
+  finalize-repair-branch:
     if: >-
       github.repository == 'teamleaderleo/systemd' &&
       github.head_ref == 'automation/vmspawn-repair-trigger'
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 10
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     steps:
       - name: Check out repair branch
@@ -25,15 +25,15 @@ jobs:
           ref: repair/vmspawn-unmapped-bind-userns-2dd0706
           fetch-depth: 0
 
-      - name: Apply bounded source guard
+      - name: Replace wrapper with minimal in-file guard
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('src/vmspawn/vmspawn.c')
-          text = path.read_text()
+          original_path = Path('src/vmspawn/vmspawn-original.inc')
+          text = original_path.read_text()
 
           function_start = text.index('static int start_virtiofsd(')
           start = text.index('                r = namespace_enter(\n', function_start)
@@ -64,19 +64,46 @@ jobs:
                   }
           '''.rstrip('\n')
 
-          path.write_text(text[:start] + new + text[end:])
+          Path('src/vmspawn/vmspawn.c').write_text(text[:start] + new + text[end:])
           PY
 
+          git rm src/vmspawn/vmspawn-original.inc
           bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
           git diff --check
 
-      - name: Commit repair branch
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo add-apt-repository -y --no-update --enable-source
+          sudo apt-get update
+          sudo apt-get build-dep -y systemd
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ ninja-build python3-pip python3-jinja2
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes --break-system-packages || \
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Build final systemd-vmspawn source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          meson setup build \
+            -Dmode=developer \
+            -Dtests=false \
+            -Dman=false \
+            -Dhtml=false
+          meson compile -C build systemd-vmspawn
+          build/systemd-vmspawn --version
+
+      - name: Commit final repair representation
         shell: bash
         run: |
           set -euxo pipefail
           git config user.name 'Linux Fieldwork'
           git config user.email 'fieldwork@example.invalid'
-          git rm .github/workflows/bootstrap-vmspawn-unmapped-bind-repair.yml
           git add src/vmspawn/vmspawn.c test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
-          git commit -m 'vmspawn: skip namespace entry without user namespace'
+          git commit -m 'vmspawn: use direct guard for optional user namespace'
           git push origin HEAD:repair/vmspawn-unmapped-bind-userns-2dd0706
