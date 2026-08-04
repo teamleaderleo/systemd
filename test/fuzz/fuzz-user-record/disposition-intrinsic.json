@@ -1,8 +1,0 @@
-{
-    "userName": "root",
-    "uid": 0,
-    "gid": 0,
-    "homeDirectory": "/root",
-    "shell": "/bin/bash",
-    "disposition": "intrinsic"
-}
