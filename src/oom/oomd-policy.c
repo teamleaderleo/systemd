@@ -57,6 +57,28 @@ static bool property_valid(OomdPolicyProperty property) {
         return property >= 0 && property < _OOMD_POLICY_PROPERTY_MAX;
 }
 
+static bool value_valid_for_property(OomdPolicyProperty property, const OomdPolicyValue *value) {
+        assert(value);
+
+        switch (property) {
+        case OOMD_POLICY_SWAP:
+                return value->pressure_limit == 0 &&
+                       value->pressure_duration_usec == 0 &&
+                       strv_isempty(value->rules);
+
+        case OOMD_POLICY_MEMORY_PRESSURE:
+                return strv_isempty(value->rules);
+
+        case OOMD_POLICY_RULES:
+                return value->pressure_limit == 0 &&
+                       value->pressure_duration_usec == 0 &&
+                       !strv_isempty(value->rules);
+
+        default:
+                return false;
+        }
+}
+
 static int value_copy(OomdPolicyValue *ret, const OomdPolicyValue *value) {
         _cleanup_strv_free_ char **rules = NULL;
 
@@ -109,7 +131,10 @@ static int contribution_from_parts(
 
         assert(ret);
 
-        if (!authority_valid(authority) || !property_valid(property) || !value)
+        if (!authority_valid(authority) ||
+            !property_valid(property) ||
+            !value ||
+            !value_valid_for_property(property, value))
                 return -EINVAL;
         if (!path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
