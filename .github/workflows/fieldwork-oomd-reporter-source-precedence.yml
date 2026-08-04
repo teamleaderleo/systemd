@@ -163,6 +163,7 @@ jobs:
           set +e
           sudo --preserve-env mkosi box -- \
             env \
+            TEST_RUNNER=ubuntu-24.04 \
             TEST_PREFER_QEMU=1 \
             'TEST_MATCH_TESTCASE=user_manager_reload_preserves_system_oomd_registration|managed_oom_reporter_source_precedence' \
             TEST_SAVE_JOURNAL=1 \
