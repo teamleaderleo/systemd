@@ -15,7 +15,7 @@ jobs:
     if: >-
       github.repository == 'teamleaderleo/systemd' &&
       github.head_ref == 'automation/vmspawn-repair-trigger'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
 
     steps:
