@@ -19,9 +19,14 @@ struct OomdReporterLifecycle {
 };
 
 static bool authority_valid(OomdReporterAuthority authority) {
-        return authority.kind >= 0 &&
-               authority.kind < _OOMD_REPORTER_KIND_MAX &&
-               uid_is_valid(authority.uid);
+        switch (authority.kind) {
+        case OOMD_REPORTER_USER_MANAGER:
+                return uid_is_valid(authority.uid);
+        case OOMD_REPORTER_SYSTEM_MANAGER:
+                return authority.uid == 0;
+        default:
+                return false;
+        }
 }
 
 static bool authority_equal(OomdReporterAuthority a, OomdReporterAuthority b) {
