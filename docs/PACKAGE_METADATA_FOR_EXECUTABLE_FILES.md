@@ -1,1 +1,0 @@
-[This content has moved to the UAPI group website](https://uapi-group.org/specifications/specs/package_metadata_for_executable_files/)
