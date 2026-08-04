@@ -53,6 +53,7 @@ MACHINE="test-vmspawn-user-bind-$$"
 WORKDIR="$(mktemp -d /tmp/test-vmspawn-user-bind.XXXXXXXXXX)"
 LOG="$WORKDIR/vmspawn.log"
 
+# shellcheck disable=SC2317 -- invoked indirectly by the EXIT trap below.
 at_exit() {
     set +e
 
