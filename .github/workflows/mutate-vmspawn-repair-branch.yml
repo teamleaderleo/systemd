@@ -1,18 +1,20 @@
 name: Apply vmspawn repair to controlled branch
 
 on:
-  push:
+  pull_request:
     branches:
       - main
     paths:
-      - .github/workflows/mutate-vmspawn-repair-branch.yml
+      - .github/vmspawn-repair-trigger
 
 permissions:
   contents: write
 
 jobs:
   mutate-repair-branch:
-    if: github.repository == 'teamleaderleo/systemd'
+    if: >-
+      github.repository == 'teamleaderleo/systemd' &&
+      github.head_ref == 'trigger/vmspawn-repair-2dd0706'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
