@@ -6,6 +6,7 @@
 #include "tests.h"
 
 #define PATH "/user.slice/user-4711.slice/user@4711.service"
+#define OTHER_PATH "/user.slice/user-4711.slice/session-1.scope"
 
 static const OomdReporterAuthority system_authority = {
         .kind = OOMD_REPORTER_SYSTEM_MANAGER,
@@ -168,6 +169,70 @@ TEST(higher_rank_policy_resolves_earlier_user_ambiguity) {
         ASSERT_EQ(decision.authority.kind, OOMD_REPORTER_SYSTEM_MANAGER);
         ASSERT_EQ(decision.authority.uid, 0U);
         ASSERT_EQ(decision.value.pressure_limit, 5000U);
+}
+
+TEST(invalid_incremental_value_is_rejected_atomically) {
+        _cleanup_(oomd_policy_decision_donep) OomdPolicyDecision decision = {};
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        char *unexpected_rules[] = { (char*) "not-a-pressure-field", NULL };
+        OomdPolicyValue original = { .pressure_limit = 7000 };
+        OomdPolicyValue invalid = {
+                .pressure_limit = 6500,
+                .rules = unexpected_rules,
+        };
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_OK(oomd_policy_store_update(store, user_authority, OOMD_POLICY_MEMORY_PRESSURE, PATH, &original));
+        ASSERT_ERROR(oomd_policy_store_update(store, user_authority, OOMD_POLICY_MEMORY_PRESSURE, PATH, &invalid), EINVAL);
+        ASSERT_EQ(oomd_policy_store_size(store), 1U);
+        ASSERT_EQ(oomd_policy_store_get_effective(store, OOMD_POLICY_MEMORY_PRESSURE, PATH, &decision), 1);
+        ASSERT_EQ(decision.value.pressure_limit, 7000U);
+}
+
+TEST(invalid_snapshot_value_is_rejected_atomically) {
+        _cleanup_(oomd_policy_decision_donep) OomdPolicyDecision decision = {};
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        char *rules[] = { (char*) "desktop", NULL };
+        OomdPolicyValue original = { .pressure_limit = 7000 };
+        OomdPolicyValue replacement = { .pressure_limit = 6500 };
+        OomdPolicyValue invalid_rules = {
+                .pressure_limit = 1,
+                .rules = rules,
+        };
+        OomdPolicySnapshotEntry invalid[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, PATH, &replacement },
+                { OOMD_POLICY_RULES, OTHER_PATH, &invalid_rules },
+        };
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_OK(oomd_policy_store_update(store, user_authority, OOMD_POLICY_MEMORY_PRESSURE, PATH, &original));
+        ASSERT_ERROR(oomd_policy_store_replace_snapshot(store, user_authority, invalid, ELEMENTSOF(invalid)), EINVAL);
+        ASSERT_EQ(oomd_policy_store_size(store), 1U);
+        ASSERT_EQ(oomd_policy_store_get_effective(store, OOMD_POLICY_MEMORY_PRESSURE, PATH, &decision), 1);
+        ASSERT_EQ(decision.value.pressure_limit, 7000U);
+}
+
+TEST(empty_rules_value_is_rejected) {
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        OomdPolicyValue empty = {};
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_ERROR(oomd_policy_store_update(store, user_authority, OOMD_POLICY_RULES, PATH, &empty), EINVAL);
+        ASSERT_EQ(oomd_policy_store_size(store), 0U);
+}
+
+TEST(swap_policy_accepts_empty_value) {
+        _cleanup_(oomd_policy_decision_donep) OomdPolicyDecision decision = {};
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        OomdPolicyValue swap = {};
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_OK(oomd_policy_store_update(store, user_authority, OOMD_POLICY_SWAP, PATH, &swap));
+        ASSERT_EQ(oomd_policy_store_get_effective(store, OOMD_POLICY_SWAP, PATH, &decision), 1);
+        ASSERT_EQ(decision.authority.kind, OOMD_REPORTER_USER_MANAGER);
+        ASSERT_EQ(decision.value.pressure_limit, 0U);
+        ASSERT_EQ(decision.value.pressure_duration_usec, 0U);
+        ASSERT_TRUE(strv_isempty(decision.value.rules));
 }
 
 DEFINE_TEST_MAIN(LOG_DEBUG);
