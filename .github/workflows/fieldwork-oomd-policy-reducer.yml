@@ -11,7 +11,10 @@ on:
       - "src/oom/meson.build"
       - "src/oom/oomd-policy.c"
       - "src/oom/oomd-policy.h"
+      - "src/oom/oomd-reporter-lifecycle.c"
+      - "src/oom/oomd-reporter-lifecycle.h"
       - "src/oom/test-oomd-policy.c"
+      - "src/oom/test-oomd-reporter-lifecycle.c"
   workflow_dispatch:
 
 permissions:
@@ -72,18 +75,22 @@ jobs:
             -Dbpf-framework=disabled \
             build
 
-      - name: Compile focused reducer test
+      - name: Compile focused policy tests
         run: |
           set -o pipefail
-          sudo mkosi box -- meson compile -C build test-oomd-policy \
-            |& tee compile-test-oomd-policy.txt
+          sudo mkosi box -- meson compile -C build \
+            test-oomd-policy \
+            test-oomd-reporter-lifecycle \
+            |& tee compile-oomd-policy-tests.txt
 
-      - name: Run focused reducer test
+      - name: Run focused policy tests
         run: |
           set -o pipefail
           sudo mkosi box -- meson test -C build --no-rebuild \
-            --print-errorlogs test-oomd-policy \
-            |& tee test-oomd-policy.txt
+            --print-errorlogs \
+            test-oomd-policy \
+            test-oomd-reporter-lifecycle \
+            |& tee test-oomd-policy-tests.txt
 
       - name: Verify clean diff
         run: |
@@ -103,13 +110,19 @@ jobs:
           if head != expected:
               raise SystemExit(f"execution identity mismatch: {head} != {expected}")
           receipt = {
-              "schema_version": 1,
+              "schema_version": 2,
               "controlled_fork_head": head,
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "target": "test-oomd-policy",
+              "targets": [
+                  "test-oomd-policy",
+                  "test-oomd-reporter-lifecycle",
+              ],
               "execution_identity": "direct-controlled-fork-head",
-              "model": "typed-array copy-and-swap reducer",
+              "model": {
+                  "policy": "typed-array copy-and-swap reducer",
+                  "lifecycle": "two-phase generation-safe reporter transitions",
+              },
               "manager_integration": False,
               "external_contact": False,
           }
@@ -125,8 +138,8 @@ jobs:
         with:
           name: fieldwork-oomd-policy-reducer-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            compile-test-oomd-policy.txt
-            test-oomd-policy.txt
+            compile-oomd-policy-tests.txt
+            test-oomd-policy-tests.txt
             receipt.json
           if-no-files-found: warn
           retention-days: 14
