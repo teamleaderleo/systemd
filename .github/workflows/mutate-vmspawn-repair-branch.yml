@@ -1,0 +1,77 @@
+name: Apply vmspawn repair to controlled branch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/mutate-vmspawn-repair-branch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  mutate-repair-branch:
+    if: github.repository == 'teamleaderleo/systemd'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: repair/vmspawn-unmapped-bind-userns-2dd0706
+          fetch-depth: 0
+
+      - name: Apply exact source guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/vmspawn/vmspawn.c')
+          text = path.read_text()
+          old = '''                r = namespace_enter(
+                                  /* pidns_fd= */ -EBADF,
+                                  /* mntns_fd= */ -EBADF,
+                                  /* netns_fd= */ -EBADF,
+                                  userns_fd,
+                                  /* root_fd= */ -EBADF);
+                  if (r < 0) {
+                          log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
+                          _exit(EXIT_FAILURE);
+                  }
+          '''
+          new = '''                if (userns_fd >= 0) {
+                          r = namespace_enter(
+                                          /* pidns_fd= */ -EBADF,
+                                          /* mntns_fd= */ -EBADF,
+                                          /* netns_fd= */ -EBADF,
+                                          userns_fd,
+                                          /* root_fd= */ -EBADF);
+                          if (r < 0) {
+                                  log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
+                                  _exit(EXIT_FAILURE);
+                          }
+                  }
+          '''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one namespace-entry block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+          git diff --check
+
+      - name: Commit repair branch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name 'Linux Fieldwork'
+          git config user.email 'fieldwork@example.invalid'
+          git rm .github/workflows/bootstrap-vmspawn-unmapped-bind-repair.yml
+          git add src/vmspawn/vmspawn.c test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+          git commit -m 'vmspawn: skip namespace entry without user namespace'
+          git push origin HEAD:repair/vmspawn-unmapped-bind-userns-2dd0706
