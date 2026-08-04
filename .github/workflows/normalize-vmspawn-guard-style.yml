@@ -15,7 +15,7 @@ jobs:
     if: >-
       github.repository == 'teamleaderleo/systemd' &&
       github.head_ref == 'automation/vmspawn-style-trigger'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 5
 
     steps:
