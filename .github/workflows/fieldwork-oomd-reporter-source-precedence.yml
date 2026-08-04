@@ -1,0 +1,269 @@
+---
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Fieldwork OOMD reporter source precedence
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fieldwork-oomd-reporter-source-precedence.yml"
+      - "tools/fieldwork-apply-oomd-reporter-source-precedence.py"
+      - "tools/fieldwork-apply-oomd-reporter-source-precedence-v2.py"
+      - "tools/fieldwork-inject-oomd-reporter-collision.py"
+      - "tools/fieldwork-inject-oomd-source-precedence-transitions.py"
+      - "src/oom/oomd-manager.c"
+      - "src/oom/oomd-manager.h"
+      - "test/units/TEST-55-OOMD.sh"
+      - "test/units/test-control.sh"
+      - "test/integration-tests/TEST-55-OOMD/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  source-precedence-vm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out exact controlled-fork head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify direct execution identity
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          printf 'expected=%s\nactual=%s\n' "$EXPECTED_HEAD" "$actual"
+          test "$actual" = "$EXPECTED_HEAD"
+
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Free disk space
+        run: |
+          sudo mv /usr/local /usr/local.trash
+          sudo mv /opt/hostedtoolcache /opt/hostedtoolcache.trash
+          sudo systemd-run rm -rf /usr/local.trash /opt/hostedtoolcache.trash
+
+      - name: Prepare btrfs workspace
+        run: |
+          truncate --size=100G btrfs.raw
+          mkfs.btrfs btrfs.raw
+          sudo mkdir -p /mnt/mkosi
+          LOOP="$(sudo losetup --find --show --direct-io=on btrfs.raw)"
+          rm -f btrfs.raw
+          sudo mount "$LOOP" /mnt/mkosi \
+            --options compress=zstd:1,user_subvol_rm_allowed,noatime,discard=async,space_cache=v2
+          sudo chown "$(id -u):$(id -g)" /mnt/mkosi
+          mkdir -p /mnt/mkosi/tmp
+          echo "TMPDIR=/mnt/mkosi/tmp" >>"$GITHUB_ENV"
+          ln -sf /mnt/mkosi/build build
+
+      - name: Apply bounded product prototype and regressions
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 -m py_compile \
+            tools/fieldwork-apply-oomd-reporter-source-precedence.py \
+            tools/fieldwork-apply-oomd-reporter-source-precedence-v2.py \
+            tools/fieldwork-inject-oomd-reporter-collision.py \
+            tools/fieldwork-inject-oomd-source-precedence-transitions.py
+          python3 tools/fieldwork-apply-oomd-reporter-source-precedence-v2.py .
+          python3 tools/fieldwork-inject-oomd-reporter-collision.py \
+            test/units/TEST-55-OOMD.sh
+          python3 tools/fieldwork-inject-oomd-source-precedence-transitions.py \
+            test/units/TEST-55-OOMD.sh
+          bash -n test/units/TEST-55-OOMD.sh
+          git diff --check
+          git diff -- src/oom/oomd-manager.c src/oom/oomd-manager.h \
+            test/units/TEST-55-OOMD.sh >evidence/product-and-regressions.diff
+          grep -F 'MANAGED_OOM_REPORTER_SYSTEM' src/oom/oomd-manager.c
+          grep -F 'Stage effective state while the old source contribution is still present' \
+            src/oom/oomd-manager.c
+          grep -F 'Publish contribution and effective state as one transaction' \
+            src/oom/oomd-manager.c
+          grep -F 'testcase_user_manager_reload_preserves_system_oomd_registration()' \
+            test/units/TEST-55-OOMD.sh
+          grep -F 'testcase_managed_oom_reporter_source_precedence()' \
+            test/units/TEST-55-OOMD.sh
+
+      - name: Configure focused Arch VM
+        run: |
+          tee mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Output]
+          Format=disk
+
+          [Build]
+          UseSubvolumes=yes
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          WorkspaceDirectory=$TMPDIR
+          PackageCacheDirectory=$TMPDIR/cache
+          Environment=
+                  WITH_DEBUG=1
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+                  SYSEXT=1
+
+          [Runtime]
+          RAM=4G
+          EOF
+
+      - name: Generate secure-boot key
+        run: mkosi --debug genkey
+
+      - name: Build tools tree
+        run: sudo mkosi -f box -- true
+
+      - name: Configure meson
+        run: |
+          sudo mkosi box -- \
+            meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+
+      - name: Compile focused OOMD targets
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson compile -C build systemd-oomd test-oomd-util \
+            |& tee evidence/compile-oomd-targets.txt
+
+      - name: Run existing OOMD unit test
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson test -C build --no-rebuild \
+            --print-errorlogs test-oomd-util \
+            |& tee evidence/test-oomd-util.txt
+
+      - name: Build integration image
+        run: sudo mkosi box -- meson compile -C build mkosi
+
+      - name: Run focused collision and transition regressions
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+
+          set +e
+          sudo --preserve-env mkosi box -- \
+            env \
+            TEST_RUNNER=ubuntu-24.04 \
+            TEST_PREFER_QEMU=1 \
+            'TEST_MATCH_TESTCASE=user_manager_reload_preserves_system_oomd_registration|managed_oom_reporter_source_precedence' \
+            TEST_SAVE_JOURNAL=1 \
+            meson test \
+            -C build \
+            --no-rebuild \
+            --setup=integration \
+            --print-errorlogs \
+            --no-stdsplit \
+            --num-processes 1 \
+            TEST-55-OOMD \
+            |& tee evidence/meson-test.txt
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          printf '%s\n' "$test_status" >evidence/test-exit-status.txt
+          : >evidence/guest-journal.txt
+          found_journal=0
+          for journal in build/test/journal/TEST-55-OOMD*.journal; do
+            [ -e "$journal" ] || continue
+            found_journal=1
+            printf '===== %s =====\n' "$journal" >>evidence/guest-journal.txt
+            journalctl --file="$journal" -o short-monotonic --no-pager \
+              >>evidence/guest-journal.txt || true
+          done
+
+          reload_fixed=0
+          precedence_passed=0
+          grep -Fq 'FIELDWORK_OOMD_REPORTER_COLLISION=NOT_REPRODUCED' evidence/guest-journal.txt \
+            && reload_fixed=1
+          grep -Fq 'FIELDWORK_OOMD_SOURCE_PRECEDENCE=PASSED' evidence/guest-journal.txt \
+            && precedence_passed=1
+
+          if grep -Fq 'FIELDWORK_OOMD_REPORTER_COLLISION=REPRODUCED' evidence/guest-journal.txt; then
+            outcome=still-reproduced
+          elif grep -Fq 'FIELDWORK_OOMD_REPORTER_COLLISION=CONTROL_FAILURE' evidence/guest-journal.txt; then
+            outcome=control-failure
+          elif [ "$found_journal" -eq 0 ]; then
+            outcome=missing-journal
+          elif [ "$reload_fixed" -eq 1 ] && [ "$precedence_passed" -eq 1 ]; then
+            outcome=fixed
+          elif [ "$reload_fixed" -eq 1 ]; then
+            outcome=precedence-transition-failed
+          else
+            outcome=unclassified
+          fi
+
+          python3 - "$test_status" "$outcome" <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          test_status = int(sys.argv[1])
+          outcome = sys.argv[2]
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          expected = os.environ["EXPECTED_HEAD"]
+          if head != expected:
+              raise SystemExit(f"execution identity mismatch: {head} != {expected}")
+          record = {
+              "schema_version": 3,
+              "controlled_fork_head": head,
+              "github_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "test": "TEST-55-OOMD",
+              "testcases": [
+                  "user_manager_reload_preserves_system_oomd_registration",
+                  "managed_oom_reporter_source_precedence",
+              ],
+              "test_exit_status": test_status,
+              "outcome": outcome,
+              "product_source_changed": True,
+              "atomic_source_effective_updates": True,
+              "execution_identity": "direct-controlled-fork-head",
+              "prototype_scope": (
+                  "system/user source contributions, system precedence, "
+                  "lower-authority reveal on withdrawal, and atomic recomputation"
+              ),
+              "known_follow_up": (
+                  "replace connection generations through authoritative initial snapshots, "
+                  "then withdraw current authority on disconnect"
+              ),
+              "external_contact": False,
+          }
+          pathlib.Path("evidence/receipt.json").write_text(
+              json.dumps(record, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(record, indent=2))
+          PY
+
+          test "$test_status" -eq 0
+          test "$outcome" = fixed
+
+      - name: Upload exact prototype evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-reporter-source-precedence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
