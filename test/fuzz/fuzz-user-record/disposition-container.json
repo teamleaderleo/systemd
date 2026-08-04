@@ -1,8 +1,0 @@
-{
-    "userName": "containeruser",
-    "uid": 100000,
-    "gid": 100000,
-    "homeDirectory": "/home/containeruser",
-    "shell": "/bin/sh",
-    "disposition": "container"
-}

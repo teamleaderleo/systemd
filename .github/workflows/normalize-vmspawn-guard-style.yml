@@ -1,0 +1,81 @@
+name: Normalize vmspawn guard formatting only
+
+on:
+  pull_request:
+    branches:
+      - automation/vmspawn-style-base
+    paths:
+      - .github/vmspawn-style-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  normalize-style:
+    if: >-
+      github.repository == 'teamleaderleo/systemd' &&
+      github.head_ref == 'automation/vmspawn-style-trigger'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: repair/vmspawn-unmapped-bind-userns-2dd0706
+          fetch-depth: 0
+
+      - name: Normalize guarded namespace block
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/vmspawn/vmspawn.c')
+          text = path.read_text()
+          function_start = text.index('static int start_virtiofsd(')
+          child_start = text.index('                /* Child */', function_start)
+          start = text.index('                if (userns_fd >= 0) {', child_start)
+          end_marker = '\n                if (userns_fd >= 0 && unshare(CLONE_NEWNS) < 0) {'
+          end = text.index(end_marker, start)
+          old = text[start:end]
+
+          required = (
+              'r = namespace_enter(',
+              'Failed to enter user namespace for virtiofsd: %m',
+              '_exit(EXIT_FAILURE);',
+          )
+          missing = [item for item in required if item not in old]
+          if missing:
+              raise SystemExit(f'unexpected guarded namespace block; missing {missing!r}')
+
+          new = '''                if (userns_fd >= 0) {
+                        r = namespace_enter(
+                                        /* pidns_fd= */ -EBADF,
+                                        /* mntns_fd= */ -EBADF,
+                                        /* netns_fd= */ -EBADF,
+                                        userns_fd,
+                                        /* root_fd= */ -EBADF);
+                        if (r < 0) {
+                                log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
+                                _exit(EXIT_FAILURE);
+                        }
+                }
+          '''.rstrip('\n')
+
+          path.write_text(text[:start] + new + text[end:])
+          PY
+
+          bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+          git diff --check
+
+      - name: Commit formatting correction
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name 'Linux Fieldwork'
+          git config user.email 'fieldwork@example.invalid'
+          git add src/vmspawn/vmspawn.c
+          git commit -m 'vmspawn: normalize optional user namespace guard'
+          git push origin HEAD:repair/vmspawn-unmapped-bind-userns-2dd0706
