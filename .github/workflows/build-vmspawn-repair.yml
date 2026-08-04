@@ -1,0 +1,56 @@
+name: Build vmspawn repair branch
+
+on:
+  pull_request:
+    branches:
+      - automation/vmspawn-build-base
+    paths:
+      - .github/vmspawn-build-trigger
+
+permissions:
+  contents: read
+
+jobs:
+  build-vmspawn:
+    if: >-
+      github.repository == 'teamleaderleo/systemd' &&
+      github.head_ref == 'automation/vmspawn-build-trigger'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: repair/vmspawn-unmapped-bind-userns-2dd0706
+          persist-credentials: false
+
+      - name: Validate regression script
+        run: bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for f in /etc/apt/sources.list.d/*.sources; do
+            sudo sed -i 's/Types: deb/Types: deb deb-src/g' "$f"
+          done
+          sudo apt-get update
+          sudo apt-get build-dep -y systemd
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ ninja-build python3-pip python3-jinja2
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes --break-system-packages
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Configure and build systemd-vmspawn
+        shell: bash
+        run: |
+          set -euxo pipefail
+          meson setup build \
+            -Dmode=developer \
+            -Dtests=false \
+            -Dman=false \
+            -Dhtml=false
+          meson compile -C build systemd-vmspawn
+          build/systemd-vmspawn --version

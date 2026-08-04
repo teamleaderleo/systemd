@@ -1,9 +1,0 @@
-{
-    "userName": "testuser",
-    "realName": "Test User",
-    "uid": 1000,
-    "gid": 1000,
-    "homeDirectory": "/home/testuser",
-    "shell": "/bin/bash",
-    "disposition": "regular"
-}
