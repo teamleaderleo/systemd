@@ -34,10 +34,21 @@ static void bind_mount_set(
         };
 }
 
-static void populate_context(ExecContext *c) {
+static void init_serializable_context(ExecContext *c) {
         assert(c);
 
         exec_context_init(c);
+        /* exec_context_init() deliberately leaves this tri-state enum invalid
+         * until unit defaults are applied. A direct serialization fixture must
+         * supply the same valid state used by the native serialization fuzz
+         * harness before calling exec_serialize_invocation(). */
+        c->private_var_tmp = PRIVATE_TMP_DISCONNECTED;
+}
+
+static void populate_context(ExecContext *c) {
+        assert(c);
+
+        init_serializable_context(c);
         c->bind_mounts = new0(BindMount, 8);
         ASSERT_NOT_NULL(c->bind_mounts);
         c->n_bind_mounts = 8;
@@ -180,7 +191,7 @@ static void deserialize_context(const char *serialized, ExecContext *context) {
         assert(serialized);
         assert(context);
 
-        exec_context_init(context);
+        init_serializable_context(context);
         cgroup_context_init(&cgroup);
         init_runtime(&runtime, &shared, &creds);
         ASSERT_NOT_NULL(fdset = fdset_new());
