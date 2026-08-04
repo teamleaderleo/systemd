@@ -1,0 +1,145 @@
+---
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Fieldwork OOMD policy reducer
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fieldwork-oomd-policy-reducer.yml"
+      - "src/oom/meson.build"
+      - "src/oom/oomd-policy.c"
+      - "src/oom/oomd-policy.h"
+      - "src/oom/oomd-reporter-lifecycle.c"
+      - "src/oom/oomd-reporter-lifecycle.h"
+      - "src/oom/test-oomd-policy.c"
+      - "src/oom/test-oomd-reporter-lifecycle.c"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  reducer-unit-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out exact controlled-fork head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify direct execution identity
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          printf 'expected=%s\nactual=%s\n' "$EXPECTED_HEAD" "$actual"
+          test "$actual" = "$EXPECTED_HEAD"
+
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Configure Arch tools tree
+        run: |
+          tee mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Build]
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          Environment=
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+          EOF
+
+      - name: Build tools tree
+        run: sudo mkosi -f box -- true
+
+      - name: Configure meson
+        run: |
+          sudo mkosi box -- \
+            meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+
+      - name: Compile focused policy tests
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson compile -C build \
+            test-oomd-policy \
+            test-oomd-reporter-lifecycle \
+            |& tee compile-oomd-policy-tests.txt
+
+      - name: Run focused policy tests
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson test -C build --no-rebuild \
+            --print-errorlogs \
+            test-oomd-policy \
+            test-oomd-reporter-lifecycle \
+            |& tee test-oomd-policy-tests.txt
+
+      - name: Verify clean diff
+        run: |
+          set -euo pipefail
+          git diff --check
+
+      - name: Record exact receipt
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          expected = os.environ["EXPECTED_HEAD"]
+          if head != expected:
+              raise SystemExit(f"execution identity mismatch: {head} != {expected}")
+          receipt = {
+              "schema_version": 2,
+              "controlled_fork_head": head,
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "targets": [
+                  "test-oomd-policy",
+                  "test-oomd-reporter-lifecycle",
+              ],
+              "execution_identity": "direct-controlled-fork-head",
+              "model": {
+                  "policy": "typed-array copy-and-swap reducer",
+                  "lifecycle": "two-phase generation-safe reporter transitions",
+              },
+              "manager_integration": False,
+              "external_contact": False,
+          }
+          pathlib.Path("receipt.json").write_text(
+              json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Upload reducer evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-policy-reducer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            compile-oomd-policy-tests.txt
+            test-oomd-policy-tests.txt
+            receipt.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -11,6 +11,8 @@ systemd_oomd_sources = files(
         'oomd-manager-bus.c',
 )
 systemd_oomd_export_sources = files(
+        'oomd-policy.c',
+        'oomd-reporter-lifecycle.c',
         'oomd-util.c',
 )
 
@@ -28,6 +30,16 @@ executables += [
                 'sources' : files('oomctl.c'),
         },
         test_template + {
+                'sources' : files('test-oomd-policy.c'),
+                'import' : ['systemd-oomd'],
+                'dependencies' : libatomic,
+        },
+        test_template + {
+                'sources' : files('test-oomd-reporter-lifecycle.c'),
+                'import' : ['systemd-oomd'],
+                'dependencies' : libatomic,
+        },
+        test_template + {
                 'sources' : files('test-oomd-util.c'),
                 'import' : ['systemd-oomd'],
                 'dependencies' : libatomic,
@@ -42,5 +54,5 @@ install_data('org.freedesktop.oom1.service',
 
 if install_sysconfdir_samples
         install_data('oomd.conf',
-                        install_dir : pkgconfigfiledir)
+                install_dir : pkgconfigfiledir)
 endif
