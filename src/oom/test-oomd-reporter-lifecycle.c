@@ -3,6 +3,8 @@
 #include "oomd-reporter-lifecycle.h"
 #include "tests.h"
 
+#define TEST_PATH "/user.slice/user-4711.slice/user@4711.service"
+
 static const OomdReporterAuthority user_authority = {
         .kind = OOMD_REPORTER_USER_MANAGER,
         .uid = 4711,
@@ -191,6 +193,43 @@ TEST(stale_prepared_transition_cannot_commit_after_newer_begin) {
         ASSERT_OK(oomd_reporter_lifecycle_prepare_snapshot(lifecycle, first, &transition));
         (void) begin_session(lifecycle);
         ASSERT_ERROR(oomd_reporter_lifecycle_commit(lifecycle, &transition), ESTALE);
+}
+
+TEST(non_root_system_authority_is_rejected_by_both_layers) {
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        _cleanup_(oomd_reporter_lifecycle_freep) OomdReporterLifecycle *lifecycle = NULL;
+        OomdReporterAuthority invalid = {
+                .kind = OOMD_REPORTER_SYSTEM_MANAGER,
+                .uid = 4711,
+        };
+        OomdReporterSession session;
+        OomdPolicyValue value = { .pressure_limit = 5000 };
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_OK(oomd_reporter_lifecycle_new(&lifecycle));
+        ASSERT_ERROR(oomd_policy_store_update(store, invalid, OOMD_POLICY_MEMORY_PRESSURE, TEST_PATH, &value), EINVAL);
+        ASSERT_ERROR(oomd_reporter_lifecycle_begin(lifecycle, invalid, &session), EINVAL);
+}
+
+TEST(root_user_manager_remains_distinct_and_valid) {
+        _cleanup_(oomd_policy_decision_donep) OomdPolicyDecision decision = {};
+        _cleanup_(oomd_policy_store_freep) OomdPolicyStore *store = NULL;
+        _cleanup_(oomd_reporter_lifecycle_freep) OomdReporterLifecycle *lifecycle = NULL;
+        OomdReporterAuthority root_user = {
+                .kind = OOMD_REPORTER_USER_MANAGER,
+                .uid = 0,
+        };
+        OomdReporterSession session;
+        OomdPolicyValue value = { .pressure_limit = 7000 };
+
+        ASSERT_OK(oomd_policy_store_new(&store));
+        ASSERT_OK(oomd_reporter_lifecycle_new(&lifecycle));
+        ASSERT_OK(oomd_policy_store_update(store, root_user, OOMD_POLICY_MEMORY_PRESSURE, TEST_PATH, &value));
+        ASSERT_EQ(oomd_policy_store_get_effective(store, OOMD_POLICY_MEMORY_PRESSURE, TEST_PATH, &decision), 1);
+        ASSERT_EQ(decision.authority.kind, OOMD_REPORTER_USER_MANAGER);
+        ASSERT_EQ(decision.authority.uid, 0U);
+        ASSERT_OK(oomd_reporter_lifecycle_begin(lifecycle, root_user, &session));
+        ASSERT_GT(session.generation, 0U);
 }
 
 DEFINE_TEST_MAIN(LOG_DEBUG);
