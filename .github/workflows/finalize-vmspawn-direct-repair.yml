@@ -1,0 +1,109 @@
+name: Finalize direct vmspawn repair
+
+on:
+  pull_request:
+    branches:
+      - automation/vmspawn-finalize-base
+    paths:
+      - .github/vmspawn-finalize-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-direct-repair:
+    if: >-
+      github.repository == 'teamleaderleo/systemd' &&
+      github.head_ref == 'automation/vmspawn-finalize-trigger'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: repair/vmspawn-unmapped-bind-userns-2dd0706
+          fetch-depth: 0
+
+      - name: Replace wrapper with minimal in-file guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          original_path = Path('src/vmspawn/vmspawn-original.inc')
+          text = original_path.read_text()
+
+          function_start = text.index('static int start_virtiofsd(')
+          start = text.index('                r = namespace_enter(\n', function_start)
+          end_marker = '\n                if (userns_fd >= 0 && unshare(CLONE_NEWNS) < 0) {'
+          end = text.index(end_marker, start)
+          old = text[start:end]
+
+          required = (
+              'userns_fd,',
+              'Failed to enter user namespace for virtiofsd: %m',
+              '_exit(EXIT_FAILURE);',
+          )
+          missing = [item for item in required if item not in old]
+          if missing:
+              raise SystemExit(f'unexpected namespace-entry block; missing {missing!r}')
+
+          new = '''                if (userns_fd >= 0) {
+                          r = namespace_enter(
+                                          /* pidns_fd= */ -EBADF,
+                                          /* mntns_fd= */ -EBADF,
+                                          /* netns_fd= */ -EBADF,
+                                          userns_fd,
+                                          /* root_fd= */ -EBADF);
+                          if (r < 0) {
+                                  log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
+                                  _exit(EXIT_FAILURE);
+                          }
+                  }
+          '''.rstrip('\n')
+
+          Path('src/vmspawn/vmspawn.c').write_text(text[:start] + new + text[end:])
+          PY
+
+          git rm src/vmspawn/vmspawn-original.inc
+          bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+          git diff --check
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo add-apt-repository -y --no-update --enable-source
+          sudo apt-get update
+          sudo apt-get build-dep -y systemd
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ ninja-build python3-pip python3-jinja2
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes --break-system-packages || \
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Build final systemd-vmspawn source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          meson setup build \
+            -Dmode=developer \
+            -Dtests=false \
+            -Dman=false \
+            -Dhtml=false
+          meson compile -C build systemd-vmspawn
+          build/systemd-vmspawn --version
+
+      - name: Commit final repair representation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name 'Linux Fieldwork'
+          git config user.email 'fieldwork@example.invalid'
+          git add src/vmspawn/vmspawn.c test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+          git commit -m 'vmspawn: use direct guard for optional user namespace'
+          git push origin HEAD:repair/vmspawn-unmapped-bind-userns-2dd0706

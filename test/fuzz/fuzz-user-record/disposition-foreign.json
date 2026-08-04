@@ -1,8 +1,0 @@
-{
-    "userName": "foreignuser",
-    "uid": 200000,
-    "gid": 200000,
-    "homeDirectory": "/home/foreign",
-    "shell": "/bin/sh",
-    "disposition": "foreign"
-}
