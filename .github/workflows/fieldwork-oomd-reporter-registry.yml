@@ -1,0 +1,125 @@
+---
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Fieldwork OOMD reporter registry
+
+on:
+  pull_request:
+    branches:
+      - linux-fieldwork/oomd-policy-reducer
+    paths:
+      - ".github/workflows/fieldwork-oomd-reporter-registry.yml"
+      - "src/oom/meson.build"
+      - "src/oom/oomd-reporter-registry.c"
+      - "src/oom/oomd-reporter-registry.h"
+      - "src/oom/test-oomd-reporter-registry.c"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  registry-unit-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out exact registry head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+
+      - name: Verify execution identity
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Configure Arch tools tree
+        run: |
+          tee mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Build]
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          Environment=
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+          EOF
+
+      - name: Build tools tree
+        run: sudo mkosi -f box -- true
+
+      - name: Configure meson
+        run: |
+          sudo mkosi box -- meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+
+      - name: Compile transactional registry test
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson compile -C build test-oomd-reporter-registry \
+            |& tee compile-oomd-reporter-registry.txt
+
+      - name: Run transactional registry test
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson test -C build --no-rebuild \
+            --print-errorlogs test-oomd-reporter-registry \
+            |& tee test-oomd-reporter-registry.txt
+
+      - name: Verify clean diff
+        run: git diff --check
+
+      - name: Record exact receipt
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          expected = os.environ["EXPECTED_HEAD"]
+          if head != expected:
+              raise SystemExit(f"execution identity mismatch: {head} != {expected}")
+          receipt = {
+              "schema_version": 1,
+              "controlled_fork_head": head,
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "target": "test-oomd-reporter-registry",
+              "execution_identity": "direct-controlled-fork-head",
+              "model": "transactional policy-plus-lifecycle reporter registry",
+              "manager_integration": False,
+              "external_contact": False,
+          }
+          pathlib.Path("receipt.json").write_text(
+              json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Upload registry evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-reporter-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            compile-oomd-reporter-registry.txt
+            test-oomd-reporter-registry.txt
+            receipt.json
+          if-no-files-found: warn
+          retention-days: 14
