@@ -49,6 +49,15 @@ if [[ -z "$KERNEL" ]]; then
 fi
 
 TEST_UID="$(id -u testuser)"
+LINGER_WAS_ENABLED=0
+USER_MANAGER_WAS_ACTIVE=0
+if [[ "$(loginctl show-user testuser -p Linger --value 2>/dev/null || true)" == yes ]]; then
+    LINGER_WAS_ENABLED=1
+fi
+if systemctl is-active --quiet "user@${TEST_UID}.service"; then
+    USER_MANAGER_WAS_ACTIVE=1
+fi
+
 MACHINE="test-vmspawn-user-bind-$$"
 WORKDIR="$(mktemp -d /tmp/test-vmspawn-user-bind.XXXXXXXXXX)"
 LOG="$WORKDIR/vmspawn.log"
@@ -66,12 +75,22 @@ at_exit() {
     pkill -KILL -f "${MACHINE}" 2>/dev/null
 
     rm -rf "$WORKDIR"
-    loginctl disable-linger testuser 2>/dev/null
+
+    if (( USER_MANAGER_WAS_ACTIVE == 0 )); then
+        systemctl stop "user@${TEST_UID}.service" 2>/dev/null
+    fi
+    if (( LINGER_WAS_ENABLED == 0 )); then
+        loginctl disable-linger testuser 2>/dev/null
+    fi
 }
 trap at_exit EXIT
 
-loginctl enable-linger testuser
-systemctl start "user@${TEST_UID}.service"
+if (( LINGER_WAS_ENABLED == 0 )); then
+    loginctl enable-linger testuser
+fi
+if (( USER_MANAGER_WAS_ACTIVE == 0 )); then
+    systemctl start "user@${TEST_UID}.service"
+fi
 
 chown testuser:testuser "$WORKDIR"
 runas testuser mkdir "$WORKDIR/share"
