@@ -57,6 +57,11 @@ executables += [
                 'dependencies' : libatomic,
         },
         test_template + {
+                'sources' : files('test-oomd-reporter-adapter-events.c'),
+                'import' : ['systemd-oomd'],
+                'dependencies' : libatomic,
+        },
+        test_template + {
                 'sources' : files('test-oomd-util.c'),
                 'import' : ['systemd-oomd'],
                 'dependencies' : libatomic,
