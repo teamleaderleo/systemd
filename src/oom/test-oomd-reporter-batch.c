@@ -151,6 +151,34 @@ TEST(null_path_is_rejected_without_state_change) {
         ASSERT_EQ(oomd_reporter_adapter_size(adapter), 1U);
 }
 
+TEST(later_null_snapshot_path_is_rejected_without_promotion) {
+        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
+        OomdReporterAdapterEvent event;
+        OomdReporterSession session;
+        OomdPolicyValue pressure = { .pressure_limit = 7000 };
+        OomdPolicyValue swap = {};
+        OomdPolicySnapshotEntry invalid[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, TEST_PATH, &pressure },
+                { OOMD_POLICY_SWAP, NULL, &swap },
+        };
+        OomdPolicySnapshotEntry valid[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, TEST_PATH, &pressure },
+        };
+
+        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
+        ASSERT_OK(oomd_reporter_adapter_connect(
+                          adapter, 1, user_authority, &session, &event));
+
+        ASSERT_ERROR(oomd_reporter_adapter_first_snapshot(
+                             adapter, 1, invalid, ELEMENTSOF(invalid), &event), EINVAL);
+        ASSERT_EQ(oomd_reporter_adapter_size(adapter), 0U);
+
+        ASSERT_OK(oomd_reporter_adapter_first_snapshot(
+                          adapter, 1, valid, ELEMENTSOF(valid), &event));
+        ASSERT_EQ(effective_pressure(adapter), 7000U);
+        ASSERT_GT(session.generation, 0U);
+}
+
 TEST(pending_generation_cannot_apply_update_array) {
         _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
         OomdReporterAdapterEvent event;
