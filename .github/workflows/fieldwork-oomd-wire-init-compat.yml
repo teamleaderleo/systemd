@@ -22,8 +22,8 @@ concurrency:
 
 env:
   EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-  EVIDENCE_DIR: ${{ runner.temp }}/fieldwork-oomd-wire-init-compat-evidence
-  MODEL_BINARY: ${{ runner.temp }}/fieldwork-oomd-wire-init-compat
+  EVIDENCE_DIR: /tmp/fieldwork-oomd-wire-init-compat-evidence
+  MODEL_BINARY: /tmp/fieldwork-oomd-wire-init-compat
 
 jobs:
   wire-init-model:
@@ -43,6 +43,7 @@ jobs:
           set -euxo pipefail
           actual="$(git rev-parse HEAD)"
           test "$actual" = "$EXPECTED_HEAD"
+          rm -rf "$EVIDENCE_DIR" "$MODEL_BINARY"
           mkdir -p "$EVIDENCE_DIR"
           {
             echo "EXPECTED_HEAD=$EXPECTED_HEAD"
