@@ -18,6 +18,7 @@ typedef enum OomdReporterLifecycleTransitionKind {
         OOMD_REPORTER_LIFECYCLE_TRANSITION_SNAPSHOT,
         OOMD_REPORTER_LIFECYCLE_TRANSITION_DISCONNECT_PENDING,
         OOMD_REPORTER_LIFECYCLE_TRANSITION_DISCONNECT_ACTIVE,
+        OOMD_REPORTER_LIFECYCLE_TRANSITION_EXPIRE_PENDING_GRACE,
         _OOMD_REPORTER_LIFECYCLE_TRANSITION_KIND_MAX,
         _OOMD_REPORTER_LIFECYCLE_TRANSITION_KIND_INVALID = -EINVAL,
 } OomdReporterLifecycleTransitionKind;
@@ -51,6 +52,11 @@ int oomd_reporter_lifecycle_prepare_snapshot(
 int oomd_reporter_lifecycle_prepare_disconnect(
                 OomdReporterLifecycle *lifecycle,
                 OomdReporterSession session,
+                OomdReporterLifecycleTransition *ret_transition);
+
+int oomd_reporter_lifecycle_prepare_grace_expiry(
+                OomdReporterLifecycle *lifecycle,
+                OomdReporterSession pending_session,
                 OomdReporterLifecycleTransition *ret_transition);
 
 int oomd_reporter_lifecycle_commit(
