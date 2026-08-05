@@ -7,7 +7,6 @@
 typedef struct OomdReporterLinkState {
         OomdReporterLinkId id;
         OomdReporterSession session;
-        bool connected;
         bool initialized;
 } OomdReporterLinkState;
 
@@ -55,6 +54,18 @@ static OomdReporterLinkState *find_link(OomdReporterAdapter *adapter, OomdReport
                         return link;
 
         return NULL;
+}
+
+static void remove_link(OomdReporterAdapter *adapter, OomdReporterLinkId link_id) {
+        assert(adapter);
+
+        for (size_t i = 0; i < adapter->n_links; i++)
+                if (adapter->links[i].id == link_id) {
+                        adapter->links[i] = adapter->links[--adapter->n_links];
+                        return;
+                }
+
+        assert_not_reached();
 }
 
 static OomdReporterAuthorityState *find_authority(
@@ -163,7 +174,6 @@ int oomd_reporter_adapter_connect(
         adapter->links[adapter->n_links++] = (OomdReporterLinkState) {
                 .id = link_id,
                 .session = session,
-                .connected = true,
         };
 
         state->pending_link_id = link_id;
@@ -197,7 +207,7 @@ int oomd_reporter_adapter_first_snapshot(
         event_reset(ret_event);
 
         link = find_link(adapter, link_id);
-        if (!link || !link->connected)
+        if (!link)
                 return -ESTALE;
         if (link->initialized)
                 return -EALREADY;
@@ -237,7 +247,7 @@ int oomd_reporter_adapter_update(
         assert(adapter);
 
         link = find_link(adapter, link_id);
-        if (!link || !link->connected || !link->initialized)
+        if (!link || !link->initialized)
                 return -ESTALE;
 
         return oomd_reporter_registry_update(
@@ -250,7 +260,8 @@ int oomd_reporter_adapter_disconnect(
                 OomdReporterAdapterEvent *ret_event) {
 
         OomdReporterAuthorityState *state;
-        OomdReporterLinkState *link;
+        OomdReporterLinkState *link, *pending;
+        OomdReporterSession session, pending_session = {};
         bool was_active, was_pending;
         int r;
 
@@ -260,20 +271,25 @@ int oomd_reporter_adapter_disconnect(
         event_reset(ret_event);
 
         link = find_link(adapter, link_id);
-        if (!link || !link->connected)
+        if (!link)
                 return 0;
 
-        state = find_authority(adapter, link->session.authority);
+        session = link->session;
+        state = find_authority(adapter, session.authority);
         assert(state);
 
         was_active = state->active_link_id == link_id;
         was_pending = state->pending_link_id == link_id;
 
-        r = oomd_reporter_registry_disconnect(adapter->registry, link->session);
+        if (was_active && state->pending_link_id != 0) {
+                pending = find_link(adapter, state->pending_link_id);
+                assert(pending);
+                pending_session = pending->session;
+        }
+
+        r = oomd_reporter_registry_disconnect(adapter->registry, session);
         if (r < 0)
                 return r;
-
-        link->connected = false;
 
         if (was_pending) {
                 state->pending_link_id = 0;
@@ -286,28 +302,29 @@ int oomd_reporter_adapter_disconnect(
 
                 state->grace_armed = false;
                 state->grace_session = (OomdReporterSession) {};
+                remove_link(adapter, link_id);
                 return 0;
         }
 
-        if (!was_active)
+        if (!was_active) {
+                remove_link(adapter, link_id);
                 return 0;
+        }
 
         state->active_connected = false;
         if (state->pending_link_id == 0) {
                 state->active_link_id = 0;
                 state->grace_armed = false;
                 state->grace_session = (OomdReporterSession) {};
+                remove_link(adapter, link_id);
                 return 0;
         }
 
-        OomdReporterLinkState *pending = find_link(adapter, state->pending_link_id);
-        assert(pending);
-        assert(pending->connected);
-
         state->grace_armed = true;
-        state->grace_session = pending->session;
+        state->grace_session = pending_session;
         ret_event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_ARM_OR_REPLACE_GRACE;
-        ret_event->grace_session = pending->session;
+        ret_event->grace_session = pending_session;
+        remove_link(adapter, link_id);
         return 0;
 }
 
@@ -329,7 +346,7 @@ int oomd_reporter_adapter_expire_grace(
                 return 0;
 
         pending = find_link(adapter, state->pending_link_id);
-        if (!pending || !pending->connected || !session_equal(pending->session, grace_session))
+        if (!pending || !session_equal(pending->session, grace_session))
                 return 0;
 
         r = oomd_reporter_registry_expire_pending_grace(adapter->registry, grace_session);
