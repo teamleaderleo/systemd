@@ -61,6 +61,12 @@ int oomd_policy_store_update(
                 const char *path,
                 const OomdPolicyValue *value);
 
+int oomd_policy_store_apply_updates(
+                OomdPolicyStore *store,
+                OomdReporterAuthority authority,
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries);
+
 int oomd_policy_store_replace_snapshot(
                 OomdPolicyStore *store,
                 OomdReporterAuthority authority,
