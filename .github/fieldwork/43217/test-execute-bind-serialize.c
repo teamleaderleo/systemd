@@ -211,6 +211,12 @@ TEST(bind_mount_serialization_roundtrip) {
         populate_context(&original);
         serialized = serialize_context(&original);
 
+        /* Flush the exact wire image before deserialization. A parser failure
+         * must retain the line that triggered it instead of producing an empty
+         * stdout artifact. */
+        fputs(serialized, stdout);
+        ASSERT_OK_ERRNO(fflush(stdout));
+
         ASSERT_NOT_NULL(strstr(serialized, "exec-context-bind-path="));
         ASSERT_NOT_NULL(strstr(serialized, "exec-context-bind-read-only-path="));
         ASSERT_NOT_NULL(strstr(serialized, "norbind"));
@@ -223,8 +229,6 @@ TEST(bind_mount_serialization_roundtrip) {
 
         reserialized = serialize_context(&restored);
         ASSERT_STREQ(serialized, reserialized);
-
-        fputs(serialized, stdout);
 }
 
 DEFINE_TEST_MAIN(LOG_DEBUG);
