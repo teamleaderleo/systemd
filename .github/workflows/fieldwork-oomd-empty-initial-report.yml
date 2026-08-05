@@ -117,7 +117,7 @@ jobs:
       - name: Compile system manager
         run: |
           set -o pipefail
-          sudo mkosi box -- meson compile -C build systemd \
+          sudo mkosi box -- meson compile -C build ./systemd:executable \
             |& tee fieldwork-evidence/compile-systemd.txt
 
       - name: Record exact receipt
