@@ -362,6 +362,22 @@ int oomd_policy_store_replace_snapshot(
         if (!authority_valid(authority))
                 return -EINVAL;
 
+        for (size_t i = 0; i < n_entries; i++) {
+                const OomdPolicySnapshotEntry *entry = entries + i;
+
+                if (!property_valid(entry->property) ||
+                    !entry->path ||
+                    !path_is_absolute(entry->path) ||
+                    !path_is_normalized(entry->path) ||
+                    !entry->value ||
+                    !value_valid_for_property(entry->property, entry->value))
+                        return -EINVAL;
+
+                for (size_t j = 0; j < i; j++)
+                        if (entries[j].property == entry->property && streq(entries[j].path, entry->path))
+                                return -EEXIST;
+        }
+
         FOREACH_ARRAY(item, store->items, store->n_items)
                 if (item->authority.kind != authority.kind || item->authority.uid != authority.uid)
                         keep++;
@@ -380,12 +396,6 @@ int oomd_policy_store_replace_snapshot(
         }
 
         FOREACH_ARRAY(entry, entries, n_entries) {
-                for (size_t i = keep; i < n_candidate; i++)
-                        if (candidate[i].property == entry->property && streq(candidate[i].path, entry->path)) {
-                                r = -EEXIST;
-                                goto fail;
-                        }
-
                 r = contribution_from_parts(
                                 candidate + n_candidate,
                                 authority,
