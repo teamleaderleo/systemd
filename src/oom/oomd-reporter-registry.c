@@ -76,16 +76,16 @@ int oomd_reporter_registry_replace_snapshot(
         return r;
 }
 
-int oomd_reporter_registry_update(
+int oomd_reporter_registry_apply_updates(
                 OomdReporterRegistry *registry,
                 OomdReporterSession session,
-                OomdPolicyProperty property,
-                const char *path,
-                const OomdPolicyValue *value) {
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries) {
 
         int r;
 
         assert(registry);
+        assert(entries || n_entries == 0);
 
         r = oomd_reporter_lifecycle_accepts_incremental(registry->lifecycle, session);
         if (r < 0)
@@ -93,7 +93,26 @@ int oomd_reporter_registry_update(
         if (r == 0)
                 return -ESTALE;
 
-        return oomd_policy_store_update(registry->policy, session.authority, property, path, value);
+        return oomd_policy_store_apply_updates(
+                        registry->policy, session.authority, entries, n_entries);
+}
+
+int oomd_reporter_registry_update(
+                OomdReporterRegistry *registry,
+                OomdReporterSession session,
+                OomdPolicyProperty property,
+                const char *path,
+                const OomdPolicyValue *value) {
+
+        const OomdPolicySnapshotEntry entry = {
+                .property = property,
+                .path = path,
+                .value = value,
+        };
+
+        assert(registry);
+
+        return oomd_reporter_registry_apply_updates(registry, session, &entry, 1);
 }
 
 int oomd_reporter_registry_disconnect(
