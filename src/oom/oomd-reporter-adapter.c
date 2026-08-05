@@ -265,6 +265,25 @@ int oomd_reporter_adapter_first_snapshot(
         return 0;
 }
 
+int oomd_reporter_adapter_apply_updates(
+                OomdReporterAdapter *adapter,
+                OomdReporterLinkId link_id,
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries) {
+
+        OomdReporterLinkState *link;
+
+        assert(adapter);
+        assert(entries || n_entries == 0);
+
+        link = find_link(adapter, link_id);
+        if (!link || !link->initialized)
+                return -ESTALE;
+
+        return oomd_reporter_registry_apply_updates(
+                        adapter->registry, link->session, entries, n_entries);
+}
+
 int oomd_reporter_adapter_update(
                 OomdReporterAdapter *adapter,
                 OomdReporterLinkId link_id,
@@ -272,16 +291,15 @@ int oomd_reporter_adapter_update(
                 const char *path,
                 const OomdPolicyValue *value) {
 
-        OomdReporterLinkState *link;
+        const OomdPolicySnapshotEntry entry = {
+                .property = property,
+                .path = path,
+                .value = value,
+        };
 
         assert(adapter);
 
-        link = find_link(adapter, link_id);
-        if (!link || !link->initialized)
-                return -ESTALE;
-
-        return oomd_reporter_registry_update(
-                        adapter->registry, link->session, property, path, value);
+        return oomd_reporter_adapter_apply_updates(adapter, link_id, &entry, 1);
 }
 
 int oomd_reporter_adapter_disconnect(

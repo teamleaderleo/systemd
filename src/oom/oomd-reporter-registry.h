@@ -20,6 +20,12 @@ int oomd_reporter_registry_replace_snapshot(
                 const OomdPolicySnapshotEntry *entries,
                 size_t n_entries);
 
+int oomd_reporter_registry_apply_updates(
+                OomdReporterRegistry *registry,
+                OomdReporterSession session,
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries);
+
 int oomd_reporter_registry_update(
                 OomdReporterRegistry *registry,
                 OomdReporterSession session,

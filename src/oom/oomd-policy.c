@@ -143,7 +143,7 @@ static int contribution_from_parts(
             !value ||
             !value_valid_for_property(property, value))
                 return -EINVAL;
-        if (!path_is_absolute(path) || !path_is_normalized(path))
+        if (!path || !path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
 
         *ret = (OomdPolicyContribution) {
@@ -231,7 +231,7 @@ int oomd_policy_store_update(
 
         if (!authority_valid(authority) || !property_valid(property))
                 return -EINVAL;
-        if (!path_is_absolute(path) || !path_is_normalized(path))
+        if (!path || !path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
 
         capacity = store->n_items + !!value;
@@ -265,6 +265,87 @@ fail:
         return r;
 }
 
+int oomd_policy_store_apply_updates(
+                OomdPolicyStore *store,
+                OomdReporterAuthority authority,
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries) {
+
+        _cleanup_free_ OomdPolicyContribution *candidate = NULL;
+        size_t capacity, n_candidate = 0;
+        int r;
+
+        assert(store);
+        assert(entries || n_entries == 0);
+
+        if (!authority_valid(authority))
+                return -EINVAL;
+        if (n_entries == 0)
+                return 0;
+
+        for (size_t i = 0; i < n_entries; i++) {
+                const OomdPolicySnapshotEntry *entry = entries + i;
+
+                if (!property_valid(entry->property) ||
+                    !entry->path ||
+                    !path_is_absolute(entry->path) ||
+                    !path_is_normalized(entry->path) ||
+                    (entry->value && !value_valid_for_property(entry->property, entry->value)))
+                        return -EINVAL;
+
+                for (size_t j = 0; j < i; j++)
+                        if (entries[j].property == entry->property && streq(entries[j].path, entry->path))
+                                return -EEXIST;
+        }
+
+        capacity = store->n_items + n_entries;
+        candidate = new0(OomdPolicyContribution, capacity);
+        if (!candidate)
+                return -ENOMEM;
+
+        FOREACH_ARRAY(item, store->items, store->n_items) {
+                bool replaced = false;
+
+                if (item->authority.kind == authority.kind && item->authority.uid == authority.uid)
+                        FOREACH_ARRAY(entry, entries, n_entries)
+                                if (item->property == entry->property && streq(item->path, entry->path)) {
+                                        replaced = true;
+                                        break;
+                                }
+
+                if (replaced)
+                        continue;
+
+                r = append_copy(candidate, capacity, &n_candidate, item);
+                if (r < 0)
+                        goto fail;
+        }
+
+        FOREACH_ARRAY(entry, entries, n_entries) {
+                if (!entry->value)
+                        continue;
+
+                r = contribution_from_parts(
+                                candidate + n_candidate,
+                                authority,
+                                entry->property,
+                                entry->path,
+                                entry->value);
+                if (r < 0)
+                        goto fail;
+                n_candidate++;
+        }
+
+        contribution_array_free(store->items, store->n_items);
+        store->items = TAKE_PTR(candidate);
+        store->n_items = n_candidate;
+        return 0;
+
+fail:
+        contribution_array_free(TAKE_PTR(candidate), n_candidate);
+        return r;
+}
+
 int oomd_policy_store_replace_snapshot(
                 OomdPolicyStore *store,
                 OomdReporterAuthority authority,
@@ -280,6 +361,22 @@ int oomd_policy_store_replace_snapshot(
 
         if (!authority_valid(authority))
                 return -EINVAL;
+
+        for (size_t i = 0; i < n_entries; i++) {
+                const OomdPolicySnapshotEntry *entry = entries + i;
+
+                if (!property_valid(entry->property) ||
+                    !entry->path ||
+                    !path_is_absolute(entry->path) ||
+                    !path_is_normalized(entry->path) ||
+                    !entry->value ||
+                    !value_valid_for_property(entry->property, entry->value))
+                        return -EINVAL;
+
+                for (size_t j = 0; j < i; j++)
+                        if (entries[j].property == entry->property && streq(entries[j].path, entry->path))
+                                return -EEXIST;
+        }
 
         FOREACH_ARRAY(item, store->items, store->n_items)
                 if (item->authority.kind != authority.kind || item->authority.uid != authority.uid)
@@ -299,12 +396,6 @@ int oomd_policy_store_replace_snapshot(
         }
 
         FOREACH_ARRAY(entry, entries, n_entries) {
-                for (size_t i = keep; i < n_candidate; i++)
-                        if (candidate[i].property == entry->property && streq(candidate[i].path, entry->path)) {
-                                r = -EEXIST;
-                                goto fail;
-                        }
-
                 r = contribution_from_parts(
                                 candidate + n_candidate,
                                 authority,
@@ -343,7 +434,7 @@ int oomd_policy_store_get_effective(
         assert(store);
         assert(ret);
 
-        if (!property_valid(property) || !path_is_absolute(path) || !path_is_normalized(path))
+        if (!property_valid(property) || !path || !path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
 
         FOREACH_ARRAY(item, store->items, store->n_items) {
