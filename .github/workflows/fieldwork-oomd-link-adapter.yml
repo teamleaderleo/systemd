@@ -3,6 +3,17 @@
 name: Fieldwork OOMD link adapter
 
 on:
+  push:
+    branches:
+      - linux-fieldwork/oomd-link-adapter
+    paths:
+      - ".github/workflows/fieldwork-oomd-link-adapter.yml"
+      - "src/oom/meson.build"
+      - "src/oom/oomd-reporter-adapter.c"
+      - "src/oom/oomd-reporter-adapter.h"
+      - "src/oom/test-oomd-reporter-adapter.c"
+      - "src/oom/test-oomd-reporter-adapter-reuse.c"
+      - "src/oom/test-oomd-reporter-adapter-events.c"
   pull_request:
     branches:
       - linux-fieldwork/oomd-registry-grace
