@@ -193,6 +193,39 @@ int oomd_reporter_lifecycle_prepare_disconnect(
         return 0;
 }
 
+int oomd_reporter_lifecycle_prepare_grace_expiry(
+                OomdReporterLifecycle *lifecycle,
+                OomdReporterSession pending_session,
+                OomdReporterLifecycleTransition *ret_transition) {
+
+        OomdReporterLifecycleState *state;
+
+        assert(lifecycle);
+        assert(ret_transition);
+
+        if (!authority_valid(pending_session.authority) || pending_session.generation == 0)
+                return -EINVAL;
+
+        *ret_transition = (OomdReporterLifecycleTransition) {
+                .kind = OOMD_REPORTER_LIFECYCLE_TRANSITION_NONE,
+                .action = OOMD_REPORTER_LIFECYCLE_NO_ACTION,
+                .session = pending_session,
+        };
+
+        state = find_state(lifecycle, pending_session.authority);
+        if (!state ||
+            !state->pending_connected ||
+            state->pending_generation != pending_session.generation)
+                return 0;
+
+        if (state->active_generation == 0 || state->active_connected)
+                return 0;
+
+        ret_transition->kind = OOMD_REPORTER_LIFECYCLE_TRANSITION_EXPIRE_PENDING_GRACE;
+        ret_transition->action = OOMD_REPORTER_LIFECYCLE_WITHDRAW_AUTHORITY;
+        return 0;
+}
+
 int oomd_reporter_lifecycle_commit(
                 OomdReporterLifecycle *lifecycle,
                 const OomdReporterLifecycleTransition *transition) {
@@ -252,6 +285,17 @@ int oomd_reporter_lifecycle_commit(
                         state->active_generation = 0;
                         state->active_connected = false;
                 }
+                return 0;
+
+        case OOMD_REPORTER_LIFECYCLE_TRANSITION_EXPIRE_PENDING_GRACE:
+                if (transition->action != OOMD_REPORTER_LIFECYCLE_WITHDRAW_AUTHORITY ||
+                    !state->pending_connected ||
+                    state->pending_generation != transition->session.generation ||
+                    state->active_generation == 0 ||
+                    state->active_connected)
+                        return -ESTALE;
+
+                state->active_generation = 0;
                 return 0;
 
         default:
