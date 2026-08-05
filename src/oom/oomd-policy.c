@@ -265,6 +265,83 @@ fail:
         return r;
 }
 
+int oomd_policy_store_apply_updates(
+                OomdPolicyStore *store,
+                OomdReporterAuthority authority,
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries) {
+
+        _cleanup_free_ OomdPolicyContribution *candidate = NULL;
+        size_t capacity, n_candidate = 0;
+        int r;
+
+        assert(store);
+        assert(entries || n_entries == 0);
+
+        if (!authority_valid(authority))
+                return -EINVAL;
+
+        FOREACH_ARRAY(entry, entries, n_entries) {
+                if (!property_valid(entry->property) ||
+                    !entry->path ||
+                    !path_is_absolute(entry->path) ||
+                    !path_is_normalized(entry->path) ||
+                    (entry->value && !value_valid_for_property(entry->property, entry->value)))
+                        return -EINVAL;
+
+                for (const OomdPolicySnapshotEntry *previous = entries; previous < entry; previous++)
+                        if (previous->property == entry->property && streq(previous->path, entry->path))
+                                return -EEXIST;
+        }
+
+        capacity = store->n_items + n_entries;
+        candidate = new0(OomdPolicyContribution, capacity);
+        if (!candidate && capacity > 0)
+                return -ENOMEM;
+
+        FOREACH_ARRAY(item, store->items, store->n_items) {
+                bool replaced = false;
+
+                if (item->authority.kind == authority.kind && item->authority.uid == authority.uid)
+                        FOREACH_ARRAY(entry, entries, n_entries)
+                                if (item->property == entry->property && streq(item->path, entry->path)) {
+                                        replaced = true;
+                                        break;
+                                }
+
+                if (replaced)
+                        continue;
+
+                r = append_copy(candidate, capacity, &n_candidate, item);
+                if (r < 0)
+                        goto fail;
+        }
+
+        FOREACH_ARRAY(entry, entries, n_entries) {
+                if (!entry->value)
+                        continue;
+
+                r = contribution_from_parts(
+                                candidate + n_candidate,
+                                authority,
+                                entry->property,
+                                entry->path,
+                                entry->value);
+                if (r < 0)
+                        goto fail;
+                n_candidate++;
+        }
+
+        contribution_array_free(store->items, store->n_items);
+        store->items = TAKE_PTR(candidate);
+        store->n_items = n_candidate;
+        return 0;
+
+fail:
+        contribution_array_free(TAKE_PTR(candidate), n_candidate);
+        return r;
+}
+
 int oomd_policy_store_replace_snapshot(
                 OomdPolicyStore *store,
                 OomdReporterAuthority authority,
