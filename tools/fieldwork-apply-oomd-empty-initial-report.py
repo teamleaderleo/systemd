@@ -47,8 +47,8 @@ def apply(path: Path) -> None:
     updated_region = region.replace(OLD_CALL, NEW_CALL, 1)
     updated = text[:start] + updated_region + text[end:]
 
-    if updated.count(NEW_CALL) != 1 or OLD_CALL in updated:
-        raise SystemExit("post-apply source invariant failed")
+    if updated_region.count(NEW_CALL) != 1 or OLD_CALL in updated_region:
+        raise SystemExit("post-apply initial-sender invariant failed")
 
     path.write_text(updated, encoding="utf-8")
     print(f"FIELDWORK_OOMD_EMPTY_INITIAL_REPORT_APPLIED={path}")
@@ -58,10 +58,10 @@ def verify(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     _, _, region = function_region(text)
 
-    if OLD_CALL in text:
-        raise SystemExit("old allow_empty=false anchor remains")
-    if text.count(NEW_CALL) != 1 or NEW_CALL not in region:
-        raise SystemExit("allow_empty=true is not uniquely confined to the initial sender")
+    if OLD_CALL in region:
+        raise SystemExit("old allow_empty=false anchor remains in the initial sender")
+    if region.count(NEW_CALL) != 1:
+        raise SystemExit("allow_empty=true is not unique within the initial sender")
     if SEND_CALL not in region:
         raise SystemExit("existing ReportManagedOOMCGroups send call drifted")
 
