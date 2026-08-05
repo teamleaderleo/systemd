@@ -178,7 +178,7 @@ static char* serialize_context(const ExecContext *context) {
         return serialized;
 }
 
-static int try_deserialize_context(const char *serialized, ExecContext *context) {
+static int try_deserialize_context(const char *serialized, ExecContext *context, long *offset) {
         _cleanup_(exec_params_deep_clear) ExecParameters params = EXEC_PARAMETERS_INIT(/* flags= */ 0);
         _cleanup_(cgroup_context_done) CGroupContext cgroup = {};
         _cleanup_fdset_free_ FDSet *fdset = NULL;
@@ -191,6 +191,7 @@ static int try_deserialize_context(const char *serialized, ExecContext *context)
 
         assert(serialized);
         assert(context);
+        assert(offset);
 
         init_serializable_context(context);
         cgroup_context_init(&cgroup);
@@ -199,6 +200,7 @@ static int try_deserialize_context(const char *serialized, ExecContext *context)
         ASSERT_NOT_NULL(f = fmemopen((void*) serialized, strlen(serialized), "r"));
 
         r = exec_deserialize_invocation(f, fdset, context, &command, &params, &runtime, &cgroup);
+        *offset = ftell(f);
 
         exec_command_done_array(&command, 1);
         runtime_done(&runtime, &shared, &creds);
@@ -225,7 +227,8 @@ static void diagnose_context_prefix(const char *serialized) {
                 _cleanup_(exec_context_done) ExecContext probe_context = {};
                 _cleanup_free_ char *probe = NULL;
                 const char *line_end;
-                size_t prefix_size, line_size;
+                size_t context_size, line_size;
+                long offset;
                 int r;
 
                 line_end = memchr(cursor, '\n', (size_t) (context_end - cursor));
@@ -236,36 +239,40 @@ static void diagnose_context_prefix(const char *serialized) {
 
                 line++;
                 line_size = (size_t) (line_end - cursor);
-                prefix_size = (size_t) (line_end + 1 - serialized);
-                probe = new(char, prefix_size + 1 + tail_size + 1);
+                context_size = (size_t) (line_end + 1 - serialized);
+                probe = new(char, context_size + 1 + tail_size + 1);
                 ASSERT_NOT_NULL(probe);
-                memcpy(probe, serialized, prefix_size);
-                probe[prefix_size] = '\n';
-                memcpy(probe + prefix_size + 1, tail, tail_size + 1);
+                memcpy(probe, serialized, context_size);
+                probe[context_size] = '\n';
+                memcpy(probe + context_size + 1, tail, tail_size + 1);
 
-                r = try_deserialize_context(probe, &probe_context);
-                if (r < 0) {
+                r = try_deserialize_context(probe, &probe_context, &offset);
+                if (r < 0 && offset >= 0 && (size_t) offset <= context_size + 1) {
                         fprintf(stderr,
-                                "first failing serialized context prefix at line %zu: %.*s (status=%d)\n",
+                                "first context-local failure at line %zu: %.*s (status=%d, offset=%ld)\n",
                                 line,
                                 (int) line_size,
                                 cursor,
-                                r);
+                                r,
+                                offset);
                         return;
                 }
 
                 cursor = line_end + 1;
         }
 
-        fputs("every serialized context prefix parsed; failure is after the context section\n", stderr);
+        fputs("every context prefix reached a later invocation section; no context-local line was isolated\n", stderr);
 }
 
 static void deserialize_context(const char *serialized, ExecContext *context) {
+        long offset;
         int r;
 
-        r = try_deserialize_context(serialized, context);
-        if (r < 0)
+        r = try_deserialize_context(serialized, context, &offset);
+        if (r < 0) {
+                fprintf(stderr, "complete invocation failed at stream offset %ld (status=%d)\n", offset, r);
                 diagnose_context_prefix(serialized);
+        }
         ASSERT_OK(r);
 }
 
