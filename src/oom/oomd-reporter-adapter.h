@@ -39,6 +39,12 @@ int oomd_reporter_adapter_first_snapshot(
                 size_t n_entries,
                 OomdReporterAdapterEvent *ret_event);
 
+int oomd_reporter_adapter_apply_updates(
+                OomdReporterAdapter *adapter,
+                OomdReporterLinkId link_id,
+                const OomdPolicySnapshotEntry *entries,
+                size_t n_entries);
+
 int oomd_reporter_adapter_update(
                 OomdReporterAdapter *adapter,
                 OomdReporterLinkId link_id,
