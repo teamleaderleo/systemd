@@ -178,7 +178,7 @@ static char* serialize_context(const ExecContext *context) {
         return serialized;
 }
 
-static void deserialize_context(const char *serialized, ExecContext *context) {
+static int try_deserialize_context(const char *serialized, ExecContext *context) {
         _cleanup_(exec_params_deep_clear) ExecParameters params = EXEC_PARAMETERS_INIT(/* flags= */ 0);
         _cleanup_(cgroup_context_done) CGroupContext cgroup = {};
         _cleanup_fdset_free_ FDSet *fdset = NULL;
@@ -187,6 +187,7 @@ static void deserialize_context(const char *serialized, ExecContext *context) {
         ExecRuntime runtime = {};
         ExecSharedRuntime shared = {};
         _cleanup_fclose_ FILE *f = NULL;
+        int r;
 
         assert(serialized);
         assert(context);
@@ -197,10 +198,75 @@ static void deserialize_context(const char *serialized, ExecContext *context) {
         ASSERT_NOT_NULL(fdset = fdset_new());
         ASSERT_NOT_NULL(f = fmemopen((void*) serialized, strlen(serialized), "r"));
 
-        ASSERT_OK(exec_deserialize_invocation(f, fdset, context, &command, &params, &runtime, &cgroup));
+        r = exec_deserialize_invocation(f, fdset, context, &command, &params, &runtime, &cgroup);
 
         exec_command_done_array(&command, 1);
         runtime_done(&runtime, &shared, &creds);
+        return r;
+}
+
+static void diagnose_context_prefix(const char *serialized) {
+        const char *context_end, *tail, *cursor;
+        size_t tail_size, line = 0;
+
+        assert(serialized);
+
+        context_end = strstr(serialized, "\n\n");
+        if (!context_end) {
+                fputs("serialized invocation has no context delimiter\n", stderr);
+                return;
+        }
+
+        tail = context_end + 2;
+        tail_size = strlen(tail);
+        cursor = serialized;
+
+        while (cursor < context_end) {
+                _cleanup_(exec_context_done) ExecContext probe_context = {};
+                _cleanup_free_ char *probe = NULL;
+                const char *line_end;
+                size_t prefix_size, line_size;
+                int r;
+
+                line_end = memchr(cursor, '\n', (size_t) (context_end - cursor));
+                if (!line_end) {
+                        fputs("serialized context line lacks newline terminator\n", stderr);
+                        return;
+                }
+
+                line++;
+                line_size = (size_t) (line_end - cursor);
+                prefix_size = (size_t) (line_end + 1 - serialized);
+                probe = new(char, prefix_size + 1 + tail_size + 1);
+                ASSERT_NOT_NULL(probe);
+                memcpy(probe, serialized, prefix_size);
+                probe[prefix_size] = '\n';
+                memcpy(probe + prefix_size + 1, tail, tail_size + 1);
+
+                r = try_deserialize_context(probe, &probe_context);
+                if (r < 0) {
+                        fprintf(stderr,
+                                "first failing serialized context prefix at line %zu: %.*s (status=%d)\n",
+                                line,
+                                (int) line_size,
+                                cursor,
+                                r);
+                        return;
+                }
+
+                cursor = line_end + 1;
+        }
+
+        fputs("every serialized context prefix parsed; failure is after the context section\n", stderr);
+}
+
+static void deserialize_context(const char *serialized, ExecContext *context) {
+        int r;
+
+        r = try_deserialize_context(serialized, context);
+        if (r < 0)
+                diagnose_context_prefix(serialized);
+        ASSERT_OK(r);
 }
 
 TEST(bind_mount_serialization_roundtrip) {
