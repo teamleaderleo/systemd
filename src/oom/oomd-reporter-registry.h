@@ -31,6 +31,10 @@ int oomd_reporter_registry_disconnect(
                 OomdReporterRegistry *registry,
                 OomdReporterSession session);
 
+int oomd_reporter_registry_expire_pending_grace(
+                OomdReporterRegistry *registry,
+                OomdReporterSession pending_session);
+
 int oomd_reporter_registry_get_effective(
                 OomdReporterRegistry *registry,
                 OomdPolicyProperty property,

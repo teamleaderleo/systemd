@@ -120,6 +120,32 @@ int oomd_reporter_registry_disconnect(
         return r;
 }
 
+int oomd_reporter_registry_expire_pending_grace(
+                OomdReporterRegistry *registry,
+                OomdReporterSession pending_session) {
+
+        OomdReporterLifecycleTransition transition;
+        int r;
+
+        assert(registry);
+
+        r = oomd_reporter_lifecycle_prepare_grace_expiry(
+                        registry->lifecycle, pending_session, &transition);
+        if (r < 0)
+                return r;
+
+        if (transition.action == OOMD_REPORTER_LIFECYCLE_WITHDRAW_AUTHORITY) {
+                r = oomd_policy_store_replace_snapshot(
+                                registry->policy, pending_session.authority, NULL, 0);
+                if (r < 0)
+                        return r;
+        }
+
+        r = oomd_reporter_lifecycle_commit(registry->lifecycle, &transition);
+        assert(r >= 0);
+        return r;
+}
+
 int oomd_reporter_registry_get_effective(
                 OomdReporterRegistry *registry,
                 OomdPolicyProperty property,
