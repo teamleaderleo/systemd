@@ -126,11 +126,16 @@ jobs:
         env:
           VARIANT: ${{ matrix.name }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          ulimit -c 0
           test_binary=$(cat "artifacts/$VARIANT/test-path.txt")
+
+          set +e
           "$test_binary" \
             >"artifacts/$VARIANT/roundtrip.stdout" \
             2>"artifacts/$VARIANT/roundtrip.stderr"
+          direct_status=$?
+
           timeout 60s valgrind \
             --quiet \
             --error-exitcode=97 \
@@ -140,8 +145,26 @@ jobs:
             "$test_binary" \
             >"artifacts/$VARIANT/valgrind.stdout" \
             2>"artifacts/$VARIANT/valgrind.stderr"
-          sha256sum "artifacts/$VARIANT/roundtrip.stdout" \
-            >"artifacts/$VARIANT/roundtrip.sha256"
+          valgrind_status=$?
+          set -e
+
+          {
+            printf 'direct_status=%s\n' "$direct_status"
+            printf 'valgrind_status=%s\n' "$valgrind_status"
+          } >"artifacts/$VARIANT/status.txt"
+          sha256sum \
+            "artifacts/$VARIANT/roundtrip.stdout" \
+            "artifacts/$VARIANT/roundtrip.stderr" \
+            "artifacts/$VARIANT/valgrind.stdout" \
+            "artifacts/$VARIANT/valgrind.stderr" \
+            >"artifacts/$VARIANT/outputs.sha256"
+
+          if (( direct_status != 0 )); then
+            exit "$direct_status"
+          fi
+          if (( valgrind_status != 0 )); then
+            exit "$valgrind_status"
+          fi
 
       - name: Upload exact round-trip evidence
         if: always()
