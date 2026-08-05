@@ -177,6 +177,23 @@ static void test_legacy_empty_reconnect_withdraws_after_grace(void) {
         assert(s.pending_generation == replacement.generation);
 }
 
+static void test_late_legacy_report_after_grace_promotes(void) {
+        WireState s = {};
+        Session old = seed_active(&s, 11);
+        Session replacement = begin(&s);
+
+        disconnect(&s, old);
+        expire_legacy_grace(&s, replacement.generation);
+        assert(s.policy == 0);
+        assert(s.active_generation == 0);
+        assert(s.pending_generation == replacement.generation);
+
+        assert(legacy_first_report(&s, replacement, 22) == 0);
+        assert(s.policy == 22);
+        assert(s.active_generation == replacement.generation);
+        assert(s.pending_generation == 0);
+}
+
 static void test_stale_grace_cannot_erase_new_snapshot(void) {
         WireState s = {};
         Session old = seed_active(&s, 11);
@@ -262,6 +279,7 @@ int main(void) {
         test_new_snapshot_preserves_continuity_after_disconnect();
         test_legacy_nonempty_first_report_promotes();
         test_legacy_empty_reconnect_withdraws_after_grace();
+        test_late_legacy_report_after_grace_promotes();
         test_stale_grace_cannot_erase_new_snapshot();
         test_newer_pending_generation_rekeys_grace();
         test_pending_disconnect_after_old_disconnect_withdraws();
