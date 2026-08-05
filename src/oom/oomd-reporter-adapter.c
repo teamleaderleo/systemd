@@ -88,6 +88,20 @@ static void event_reset(OomdReporterAdapterEvent *event) {
         };
 }
 
+static void event_arm(OomdReporterAdapterEvent *event, OomdReporterSession session) {
+        assert(event);
+
+        event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_ARM_OR_REPLACE_GRACE;
+        event->grace_session = session;
+}
+
+static void event_cancel(OomdReporterAdapterEvent *event, OomdReporterSession session) {
+        assert(event);
+
+        event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_CANCEL_GRACE;
+        event->grace_session = session;
+}
+
 OomdReporterAdapter *oomd_reporter_adapter_free(OomdReporterAdapter *adapter) {
         if (!adapter)
                 return NULL;
@@ -180,8 +194,7 @@ int oomd_reporter_adapter_connect(
         if (state->active_link_id != 0 && !state->active_connected) {
                 state->grace_armed = true;
                 state->grace_session = session;
-                ret_event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_ARM_OR_REPLACE_GRACE;
-                ret_event->grace_session = session;
+                event_arm(ret_event, session);
         }
 
         *ret_session = session;
@@ -197,6 +210,7 @@ int oomd_reporter_adapter_first_snapshot(
 
         OomdReporterAuthorityState *state;
         OomdReporterLinkState *link;
+        OomdReporterSession cancelled_grace = {};
         bool cancel_grace;
         int r;
 
@@ -217,6 +231,9 @@ int oomd_reporter_adapter_first_snapshot(
                 return -ESTALE;
 
         cancel_grace = state->grace_armed;
+        if (cancel_grace)
+                cancelled_grace = state->grace_session;
+
         r = oomd_reporter_registry_replace_snapshot(
                         adapter->registry, link->session, entries, n_entries);
         if (r < 0)
@@ -230,7 +247,7 @@ int oomd_reporter_adapter_first_snapshot(
         state->grace_session = (OomdReporterSession) {};
 
         if (cancel_grace)
-                ret_event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_CANCEL_GRACE;
+                event_cancel(ret_event, cancelled_grace);
 
         return 0;
 }
@@ -261,7 +278,7 @@ int oomd_reporter_adapter_disconnect(
 
         OomdReporterAuthorityState *state;
         OomdReporterLinkState *link, *pending;
-        OomdReporterSession session, pending_session = {};
+        OomdReporterSession session, pending_session = {}, cancelled_grace = {};
         bool was_active, was_pending;
         int r;
 
@@ -286,6 +303,8 @@ int oomd_reporter_adapter_disconnect(
                 assert(pending);
                 pending_session = pending->session;
         }
+        if (state->grace_armed)
+                cancelled_grace = state->grace_session;
 
         r = oomd_reporter_registry_disconnect(adapter->registry, session);
         if (r < 0)
@@ -297,7 +316,7 @@ int oomd_reporter_adapter_disconnect(
                 if (state->active_link_id != 0 && !state->active_connected) {
                         state->active_link_id = 0;
                         if (state->grace_armed)
-                                ret_event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_CANCEL_GRACE;
+                                event_cancel(ret_event, cancelled_grace);
                 }
 
                 state->grace_armed = false;
@@ -322,8 +341,7 @@ int oomd_reporter_adapter_disconnect(
 
         state->grace_armed = true;
         state->grace_session = pending_session;
-        ret_event->timer_action = OOMD_REPORTER_ADAPTER_TIMER_ARM_OR_REPLACE_GRACE;
-        ret_event->grace_session = pending_session;
+        event_arm(ret_event, pending_session);
         remove_link(adapter, link_id);
         return 0;
 }
