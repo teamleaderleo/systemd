@@ -12,6 +12,7 @@ on:
       - "src/oom/oomd-reporter-adapter.c"
       - "src/oom/oomd-reporter-adapter.h"
       - "src/oom/test-oomd-reporter-adapter.c"
+      - "src/oom/test-oomd-reporter-adapter-reuse.c"
   workflow_dispatch:
 
 permissions:
@@ -66,17 +67,21 @@ jobs:
             -Dbpf-framework=disabled \
             build
 
-      - name: Compile link adapter test
+      - name: Compile link adapter tests
         run: |
           set -o pipefail
-          sudo mkosi box -- meson compile -C build test-oomd-reporter-adapter \
+          sudo mkosi box -- meson compile -C build \
+            test-oomd-reporter-adapter \
+            test-oomd-reporter-adapter-reuse \
             |& tee compile-oomd-reporter-adapter.txt
 
-      - name: Run link adapter test
+      - name: Run link adapter tests
         run: |
           set -o pipefail
           sudo mkosi box -- meson test -C build --no-rebuild \
-            --print-errorlogs test-oomd-reporter-adapter \
+            --print-errorlogs \
+            test-oomd-reporter-adapter \
+            test-oomd-reporter-adapter-reuse \
             |& tee test-oomd-reporter-adapter.txt
 
       - name: Verify clean diff
@@ -102,9 +107,12 @@ jobs:
               "controlled_fork_head": head,
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "target": "test-oomd-reporter-adapter",
+              "targets": [
+                  "test-oomd-reporter-adapter",
+                  "test-oomd-reporter-adapter-reuse",
+              ],
               "execution_identity": "direct-controlled-fork-head",
-              "model": "per-link first-snapshot, incremental, disconnect, and grace-token adapter",
+              "model": "per-link first-snapshot, incremental, disconnect, grace-token, and bounded link-lifetime adapter",
               "manager_integration": False,
               "event_timer_integration": False,
               "external_contact": False,
