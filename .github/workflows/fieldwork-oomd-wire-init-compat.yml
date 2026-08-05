@@ -1,0 +1,86 @@
+name: Fieldwork OOMD wire initialization compatibility
+
+on:
+  push:
+    branches:
+      - linux-fieldwork/oomd-wire-init-compat
+    paths:
+      - tools/fieldwork-oomd-wire-init-compat.c
+      - .github/workflows/fieldwork-oomd-wire-init-compat.yml
+  pull_request:
+    paths:
+      - tools/fieldwork-oomd-wire-init-compat.c
+      - .github/workflows/fieldwork-oomd-wire-init-compat.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+  EVIDENCE_DIR: ${{ runner.temp }}/fieldwork-oomd-wire-init-compat-evidence
+  MODEL_BINARY: ${{ runner.temp }}/fieldwork-oomd-wire-init-compat
+
+jobs:
+  wire-init-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+
+      - name: Verify execution identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_HEAD"
+          mkdir -p "$EVIDENCE_DIR"
+          {
+            echo "EXPECTED_HEAD=$EXPECTED_HEAD"
+            echo "ACTUAL_HEAD=$actual"
+            echo "MODEL_BLOB=$(git rev-parse HEAD:tools/fieldwork-oomd-wire-init-compat.c)"
+            echo "PRODUCT_SOURCE_CHANGED=false"
+            echo "MANAGER_INTEGRATION=false"
+            echo "EXTERNAL_CONTACT=false"
+          } | tee "$EVIDENCE_DIR/receipt.txt"
+
+      - name: Compile compatibility model
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            tools/fieldwork-oomd-wire-init-compat.c \
+            -o "$MODEL_BINARY"
+
+      - name: Run compatibility model
+        shell: bash
+        run: |
+          set -euxo pipefail
+          "$MODEL_BINARY" | tee "$EVIDENCE_DIR/test.log"
+          grep -Fxq 'FIELDWORK_OOMD_WIRE_INIT_COMPAT=PASSED' \
+            "$EVIDENCE_DIR/test.log"
+
+      - name: Verify clean worktree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-wire-init-compat-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 14
