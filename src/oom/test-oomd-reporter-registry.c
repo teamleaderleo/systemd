@@ -191,6 +191,91 @@ TEST(pending_disconnect_does_not_remove_connected_active_policy) {
         ASSERT_EQ(effective_pressure(registry), 7200U);
 }
 
+TEST(grace_expiry_is_noop_while_old_active_remains_connected) {
+        _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
+        OomdPolicyValue update = { .pressure_limit = 7100 };
+        OomdReporterSession first, second;
+
+        ASSERT_OK(oomd_reporter_registry_new(&registry));
+        first = activate_pressure(registry, user_authority, 7000);
+        second = begin_session(registry, user_authority);
+
+        ASSERT_OK(oomd_reporter_registry_expire_pending_grace(registry, second));
+        ASSERT_EQ(effective_pressure(registry), 7000U);
+        ASSERT_OK(oomd_reporter_registry_update(
+                          registry, first, OOMD_POLICY_MEMORY_PRESSURE, PATH, &update));
+        ASSERT_EQ(effective_pressure(registry), 7100U);
+}
+
+TEST(grace_expiry_withdraws_retained_policy_and_keeps_pending) {
+        _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
+        OomdPolicyDecision decision = {};
+        OomdPolicyValue replacement = { .pressure_limit = 6000 };
+        OomdPolicySnapshotEntry entries[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, PATH, &replacement },
+        };
+        OomdReporterSession first, second;
+
+        ASSERT_OK(oomd_reporter_registry_new(&registry));
+        first = activate_pressure(registry, user_authority, 7000);
+        second = begin_session(registry, user_authority);
+
+        ASSERT_OK(oomd_reporter_registry_disconnect(registry, first));
+        ASSERT_EQ(effective_pressure(registry), 7000U);
+        ASSERT_OK(oomd_reporter_registry_expire_pending_grace(registry, second));
+        ASSERT_EQ(oomd_reporter_registry_size(registry), 0U);
+        ASSERT_EQ(oomd_reporter_registry_get_effective(
+                          registry, OOMD_POLICY_MEMORY_PRESSURE, PATH, &decision), 0);
+
+        ASSERT_OK(oomd_reporter_registry_replace_snapshot(
+                          registry, second, entries, ELEMENTSOF(entries)));
+        ASSERT_EQ(effective_pressure(registry), 6000U);
+}
+
+TEST(stale_grace_cannot_withdraw_for_newer_pending_generation) {
+        _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
+        OomdPolicyValue replacement = { .pressure_limit = 6000 };
+        OomdPolicySnapshotEntry entries[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, PATH, &replacement },
+        };
+        OomdReporterSession active, first_pending, second_pending;
+
+        ASSERT_OK(oomd_reporter_registry_new(&registry));
+        active = activate_pressure(registry, user_authority, 7000);
+        first_pending = begin_session(registry, user_authority);
+        ASSERT_OK(oomd_reporter_registry_disconnect(registry, active));
+        second_pending = begin_session(registry, user_authority);
+
+        ASSERT_OK(oomd_reporter_registry_expire_pending_grace(registry, first_pending));
+        ASSERT_EQ(effective_pressure(registry), 7000U);
+
+        ASSERT_OK(oomd_reporter_registry_expire_pending_grace(registry, second_pending));
+        ASSERT_EQ(oomd_reporter_registry_size(registry), 0U);
+
+        ASSERT_OK(oomd_reporter_registry_replace_snapshot(
+                          registry, second_pending, entries, ELEMENTSOF(entries)));
+        ASSERT_EQ(effective_pressure(registry), 6000U);
+}
+
+TEST(stale_grace_after_promotion_is_ignored) {
+        _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
+        OomdPolicyValue replacement = { .pressure_limit = 6000 };
+        OomdPolicySnapshotEntry entries[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, PATH, &replacement },
+        };
+        OomdReporterSession first, second;
+
+        ASSERT_OK(oomd_reporter_registry_new(&registry));
+        first = activate_pressure(registry, user_authority, 7000);
+        second = begin_session(registry, user_authority);
+        ASSERT_OK(oomd_reporter_registry_disconnect(registry, first));
+        ASSERT_OK(oomd_reporter_registry_replace_snapshot(
+                          registry, second, entries, ELEMENTSOF(entries)));
+
+        ASSERT_OK(oomd_reporter_registry_expire_pending_grace(registry, second));
+        ASSERT_EQ(effective_pressure(registry), 6000U);
+}
+
 TEST(late_old_disconnect_cannot_erase_new_policy) {
         _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
         OomdPolicyValue replacement = { .pressure_limit = 6000 };
