@@ -24,6 +24,7 @@ concurrency:
 
 env:
   EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  EVIDENCE_DIR: ${{ runner.temp }}/fieldwork-oomd-link-adapter-evidence
 
 jobs:
   link-adapter-test:
@@ -37,7 +38,9 @@ jobs:
           persist-credentials: false
 
       - name: Verify execution identity
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p "$EVIDENCE_DIR"
 
       - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
 
@@ -73,7 +76,7 @@ jobs:
           sudo mkosi box -- meson compile -C build \
             test-oomd-reporter-adapter \
             test-oomd-reporter-adapter-reuse \
-            |& tee compile-oomd-reporter-adapter.txt
+            |& tee "$EVIDENCE_DIR/compile-oomd-reporter-adapter.txt"
 
       - name: Run link adapter tests
         run: |
@@ -82,7 +85,7 @@ jobs:
             --print-errorlogs \
             test-oomd-reporter-adapter \
             test-oomd-reporter-adapter-reuse \
-            |& tee test-oomd-reporter-adapter.txt
+            |& tee "$EVIDENCE_DIR/test-oomd-reporter-adapter.txt"
 
       - name: Verify clean diff
         run: |
@@ -117,7 +120,9 @@ jobs:
               "event_timer_integration": False,
               "external_contact": False,
           }
-          Path("receipt.json").write_text(
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          evidence.mkdir(parents=True, exist_ok=True)
+          (evidence / "receipt.json").write_text(
               json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
           )
           print(json.dumps(receipt, indent=2))
@@ -128,9 +133,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: fieldwork-oomd-link-adapter-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            compile-oomd-reporter-adapter.txt
-            test-oomd-reporter-adapter.txt
-            receipt.json
+          path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: warn
           retention-days: 14
