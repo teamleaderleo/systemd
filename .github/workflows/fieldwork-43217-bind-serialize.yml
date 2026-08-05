@@ -1,0 +1,176 @@
+name: Fieldwork bind mount serialization roundtrip
+
+on:
+  push:
+    branches:
+      - fieldwork/43217-bind-serialize-roundtrip
+    paths:
+      - .github/fieldwork/43217/**
+      - .github/workflows/fieldwork-43217-bind-serialize.yml
+  pull_request:
+    paths:
+      - .github/fieldwork/43217/**
+      - .github/workflows/fieldwork-43217-bind-serialize.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-systemd-43217-serialize-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  roundtrip:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - name: canonical-base
+            sha: 63e35ca3f99566095c84248e9eb41a3a6b32f2eb
+          - name: active-pr-43217
+            sha: d32993d1f67ec1b42719c89eeda9425042df57ce
+
+    steps:
+      - name: Check out controlled carrier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          path: carrier
+
+      - name: Check out exact systemd source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: systemd/systemd
+          ref: ${{ matrix.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: product
+
+      - name: Enable source packages and install build dependencies
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.{list,sources}
+          for file in /etc/apt/sources.list.d/*.sources; do
+            sudo sed -i 's/^Types: deb$/Types: deb deb-src/' "$file"
+          done
+          sudo apt-get update
+          sudo apt-get build-dep --yes systemd
+          sudo apt-get install --yes --no-install-recommends \
+            meson ninja-build pkg-config python3-jinja2 python3-pyelftools valgrind
+
+      - name: Inject bounded source-native test
+        env:
+          VARIANT: ${{ matrix.name }}
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C product rev-parse HEAD)" = "$EXPECTED_SHA"
+          cp carrier/.github/fieldwork/43217/test-execute-bind-serialize.c \
+            product/src/test/test-execute-bind-serialize.c
+          cat >>product/src/test/meson.build <<'EOF'
+
+          # Linux Fieldwork execution-only serialization discriminator.
+          executables += [
+                  core_test_template + {
+                          'sources' : files('test-execute-bind-serialize.c'),
+                  },
+          ]
+          EOF
+
+          mkdir -p "artifacts/$VARIANT"
+          git -C product add -N src/test/test-execute-bind-serialize.c
+          git -C product diff --check
+          git -C product diff --name-only | sort >"artifacts/$VARIANT/changed-files.txt"
+          cat >"artifacts/$VARIANT/expected-files.txt" <<'EOF'
+          src/test/meson.build
+          src/test/test-execute-bind-serialize.c
+          EOF
+          diff -u "artifacts/$VARIANT/expected-files.txt" \
+            "artifacts/$VARIANT/changed-files.txt"
+          git -C product diff -- src/test/meson.build src/test/test-execute-bind-serialize.c \
+            >"artifacts/$VARIANT/test.patch"
+          {
+            echo "variant=$VARIANT"
+            echo "head=$EXPECTED_SHA"
+            echo "execute_serialize=$(git -C product hash-object src/core/execute-serialize.c)"
+            echo "load_fragment=$(git -C product hash-object src/core/load-fragment.c)"
+            echo "test_source=$(sha256sum carrier/.github/fieldwork/43217/test-execute-bind-serialize.c)"
+          } >"artifacts/$VARIANT/source-identity.txt"
+
+      - name: Configure and build focused test
+        env:
+          VARIANT: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          meson setup product/build product \
+            --buildtype=debugoptimized \
+            --auto-features=disabled \
+            -Dmode=developer \
+            -Dman=disabled \
+            -Dhtml=disabled \
+            -Dtranslations=false \
+            >"artifacts/$VARIANT/meson-setup.log" 2>&1
+          meson compile -C product/build test-execute-bind-serialize \
+            >"artifacts/$VARIANT/build.log" 2>&1
+          test_binary=$(find product/build -type f -name test-execute-bind-serialize -perm -111 -print -quit)
+          test -n "$test_binary"
+          printf '%s\n' "$test_binary" >"artifacts/$VARIANT/test-path.txt"
+          sha256sum "$test_binary" >"artifacts/$VARIANT/test-sha256.txt"
+
+      - name: Execute round-trip and Valgrind controls
+        env:
+          VARIANT: ${{ matrix.name }}
+        run: |
+          set -uo pipefail
+          ulimit -c 0
+          test_binary=$(cat "artifacts/$VARIANT/test-path.txt")
+
+          set +e
+          "$test_binary" \
+            >"artifacts/$VARIANT/roundtrip.stdout" \
+            2>"artifacts/$VARIANT/roundtrip.stderr"
+          direct_status=$?
+
+          timeout 60s valgrind \
+            --quiet \
+            --error-exitcode=97 \
+            --leak-check=full \
+            --errors-for-leak-kinds=definite,indirect,possible \
+            --track-origins=yes \
+            "$test_binary" \
+            >"artifacts/$VARIANT/valgrind.stdout" \
+            2>"artifacts/$VARIANT/valgrind.stderr"
+          valgrind_status=$?
+          set -e
+
+          {
+            printf 'direct_status=%s\n' "$direct_status"
+            printf 'valgrind_status=%s\n' "$valgrind_status"
+          } >"artifacts/$VARIANT/status.txt"
+          sha256sum \
+            "artifacts/$VARIANT/roundtrip.stdout" \
+            "artifacts/$VARIANT/roundtrip.stderr" \
+            "artifacts/$VARIANT/valgrind.stdout" \
+            "artifacts/$VARIANT/valgrind.stderr" \
+            >"artifacts/$VARIANT/outputs.sha256"
+
+          if (( direct_status != 0 )); then
+            exit "$direct_status"
+          fi
+          if (( valgrind_status != 0 )); then
+            exit "$valgrind_status"
+          fi
+
+      - name: Upload exact round-trip evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemd-43217-bind-serialize-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/${{ matrix.name }}/
+          if-no-files-found: error
+          retention-days: 30
