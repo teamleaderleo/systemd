@@ -143,7 +143,7 @@ static int contribution_from_parts(
             !value ||
             !value_valid_for_property(property, value))
                 return -EINVAL;
-        if (!path_is_absolute(path) || !path_is_normalized(path))
+        if (!path || !path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
 
         *ret = (OomdPolicyContribution) {
@@ -231,7 +231,7 @@ int oomd_policy_store_update(
 
         if (!authority_valid(authority) || !property_valid(property))
                 return -EINVAL;
-        if (!path_is_absolute(path) || !path_is_normalized(path))
+        if (!path || !path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
 
         capacity = store->n_items + !!value;
@@ -280,8 +280,12 @@ int oomd_policy_store_apply_updates(
 
         if (!authority_valid(authority))
                 return -EINVAL;
+        if (n_entries == 0)
+                return 0;
 
-        FOREACH_ARRAY(entry, entries, n_entries) {
+        for (size_t i = 0; i < n_entries; i++) {
+                const OomdPolicySnapshotEntry *entry = entries + i;
+
                 if (!property_valid(entry->property) ||
                     !entry->path ||
                     !path_is_absolute(entry->path) ||
@@ -289,14 +293,14 @@ int oomd_policy_store_apply_updates(
                     (entry->value && !value_valid_for_property(entry->property, entry->value)))
                         return -EINVAL;
 
-                for (const OomdPolicySnapshotEntry *previous = entries; previous < entry; previous++)
-                        if (previous->property == entry->property && streq(previous->path, entry->path))
+                for (size_t j = 0; j < i; j++)
+                        if (entries[j].property == entry->property && streq(entries[j].path, entry->path))
                                 return -EEXIST;
         }
 
         capacity = store->n_items + n_entries;
         candidate = new0(OomdPolicyContribution, capacity);
-        if (!candidate && capacity > 0)
+        if (!candidate)
                 return -ENOMEM;
 
         FOREACH_ARRAY(item, store->items, store->n_items) {
@@ -420,7 +424,7 @@ int oomd_policy_store_get_effective(
         assert(store);
         assert(ret);
 
-        if (!property_valid(property) || !path_is_absolute(path) || !path_is_normalized(path))
+        if (!property_valid(property) || !path || !path_is_absolute(path) || !path_is_normalized(path))
                 return -EINVAL;
 
         FOREACH_ARRAY(item, store->items, store->n_items) {
