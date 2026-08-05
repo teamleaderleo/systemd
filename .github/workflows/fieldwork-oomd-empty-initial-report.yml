@@ -1,0 +1,172 @@
+---
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Fieldwork OOMD empty initial report
+
+on:
+  push:
+    branches:
+      - linux-fieldwork/oomd-empty-initial-report
+    paths:
+      - ".github/workflows/fieldwork-oomd-empty-initial-report.yml"
+      - "tools/fieldwork-apply-oomd-empty-initial-report.py"
+  pull_request:
+    branches:
+      - linux-fieldwork/oomd-wire-init-compat
+    paths:
+      - ".github/workflows/fieldwork-oomd-empty-initial-report.yml"
+      - "tools/fieldwork-apply-oomd-empty-initial-report.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  EVIDENCE_DIR: ${{ runner.temp }}/fieldwork-oomd-empty-initial-report-evidence
+
+jobs:
+  sender-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact sender-validation head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+
+      - name: Verify execution identity
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p "$EVIDENCE_DIR"
+          {
+            echo "EXPECTED_HEAD=$EXPECTED_HEAD"
+            echo "ACTUAL_HEAD=$(git rev-parse HEAD)"
+            echo "PRODUCT_SOURCE_COMMITTED=false"
+            echo "GENERATED_PRODUCT_SOURCE_CHANGED=true"
+            echo "MANAGER_SENDER_INTEGRATION=true"
+            echo "RECEIVER_REGISTRY_INTEGRATION=false"
+            echo "EXTERNAL_CONTACT=false"
+          } | tee "$EVIDENCE_DIR/identity.txt"
+
+      - name: Verify existing wire compatibility
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          interface = Path("src/shared/varlink-io.systemd.oom.c").read_text(encoding="utf-8")
+          receiver = Path("src/oom/oomd-manager.c").read_text(encoding="utf-8")
+
+          required_interface = (
+              "SD_VARLINK_DEFINE_INPUT_BY_TYPE(cgroups, ControlGroup, SD_VARLINK_ARRAY)"
+          )
+          if required_interface not in interface:
+              raise SystemExit("ReportManagedOOMCGroups no longer accepts a cgroups array")
+          if '"io.systemd.oom"' not in interface or "ReportManagedOOMCGroups" not in interface:
+              raise SystemExit("existing ManagedOOM report method drifted")
+          if 'cgroups = sd_json_variant_by_key(parameters, "cgroups");' not in receiver:
+              raise SystemExit("oomd receiver cgroups lookup drifted")
+          if "JSON_VARIANT_ARRAY_FOREACH(c, cgroups)" not in receiver:
+              raise SystemExit("oomd receiver no longer iterates the report array")
+
+          print("FIELDWORK_OOMD_EXISTING_EMPTY_ARRAY_COMPAT=VERIFIED")
+          PY
+
+      - name: Apply fail-closed sender change
+        run: |
+          set -euxo pipefail
+          python3 tools/fieldwork-apply-oomd-empty-initial-report.py src/core/varlink.c
+          python3 tools/fieldwork-apply-oomd-empty-initial-report.py --verify src/core/varlink.c
+
+      - name: Verify generated product diff
+        run: |
+          set -euxo pipefail
+          git diff --check -- src/core/varlink.c
+          test "$(git diff --numstat -- src/core/varlink.c)" = $'1\t1\tsrc/core/varlink.c'
+          git diff -- src/core/varlink.c | tee "$EVIDENCE_DIR/product.diff"
+          grep -Fq 'allow_empty= */ true' "$EVIDENCE_DIR/product.diff"
+          grep -Fq 'allow_empty= */ false' "$EVIDENCE_DIR/product.diff"
+
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Configure Arch tools tree
+        run: |
+          tee mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Build]
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          Environment=
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+          EOF
+
+      - name: Build tools tree
+        run: sudo mkosi -f box -- true
+
+      - name: Configure Meson
+        run: |
+          sudo mkosi box -- meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+
+      - name: Compile system manager
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson compile -C build src/core/systemd:executable \
+            |& tee "$EVIDENCE_DIR/compile-systemd.txt"
+
+      - name: Record exact receipt
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          expected = os.environ["EXPECTED_HEAD"]
+          if head != expected:
+              raise SystemExit(f"execution identity mismatch: {head} != {expected}")
+
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          diff = (evidence / "product.diff").read_bytes()
+          receipt = {
+              "schema_version": 1,
+              "controlled_fork_head": head,
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "execution_identity": "direct-controlled-fork-head",
+              "generated_change": "user manager initial ManagedOOM report uses allow_empty=true",
+              "existing_method_reused": "io.systemd.oom.ReportManagedOOMCGroups",
+              "product_diff_sha256": hashlib.sha256(diff).hexdigest(),
+              "system_manager_compiled": True,
+              "receiver_registry_integration": False,
+              "external_contact": False,
+          }
+          (evidence / "receipt.json").write_text(
+              json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Upload sender evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-empty-initial-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 14
