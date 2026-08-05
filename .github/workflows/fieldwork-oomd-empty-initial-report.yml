@@ -3,6 +3,12 @@
 name: Fieldwork OOMD empty initial report
 
 on:
+  push:
+    branches:
+      - linux-fieldwork/oomd-empty-initial-report
+    paths:
+      - ".github/workflows/fieldwork-oomd-empty-initial-report.yml"
+      - "tools/fieldwork-apply-oomd-empty-initial-report.py"
   pull_request:
     branches:
       - linux-fieldwork/oomd-wire-init-compat
@@ -20,6 +26,7 @@ concurrency:
 
 env:
   EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  EVIDENCE_DIR: ${{ runner.temp }}/fieldwork-oomd-empty-initial-report-evidence
 
 jobs:
   sender-compile:
@@ -36,7 +43,7 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          mkdir -p fieldwork-evidence
+          mkdir -p "$EVIDENCE_DIR"
           {
             echo "EXPECTED_HEAD=$EXPECTED_HEAD"
             echo "ACTUAL_HEAD=$(git rev-parse HEAD)"
@@ -45,7 +52,7 @@ jobs:
             echo "MANAGER_SENDER_INTEGRATION=true"
             echo "RECEIVER_REGISTRY_INTEGRATION=false"
             echo "EXTERNAL_CONTACT=false"
-          } | tee fieldwork-evidence/identity.txt
+          } | tee "$EVIDENCE_DIR/identity.txt"
 
       - name: Verify existing wire compatibility
         run: |
@@ -82,9 +89,9 @@ jobs:
           set -euxo pipefail
           git diff --check -- src/core/varlink.c
           test "$(git diff --numstat -- src/core/varlink.c)" = $'1\t1\tsrc/core/varlink.c'
-          git diff -- src/core/varlink.c | tee fieldwork-evidence/product.diff
-          grep -Fq 'allow_empty= */ true' fieldwork-evidence/product.diff
-          grep -Fq 'allow_empty= */ false' fieldwork-evidence/product.diff
+          git diff -- src/core/varlink.c | tee "$EVIDENCE_DIR/product.diff"
+          grep -Fq 'allow_empty= */ true' "$EVIDENCE_DIR/product.diff"
+          grep -Fq 'allow_empty= */ false' "$EVIDENCE_DIR/product.diff"
 
       - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
 
@@ -117,8 +124,8 @@ jobs:
       - name: Compile system manager
         run: |
           set -o pipefail
-          sudo mkosi box -- meson compile -C build ./systemd:executable \
-            |& tee fieldwork-evidence/compile-systemd.txt
+          sudo mkosi box -- meson compile -C build src/core/systemd:executable \
+            |& tee "$EVIDENCE_DIR/compile-systemd.txt"
 
       - name: Record exact receipt
         run: |
@@ -134,7 +141,8 @@ jobs:
           if head != expected:
               raise SystemExit(f"execution identity mismatch: {head} != {expected}")
 
-          diff = Path("fieldwork-evidence/product.diff").read_bytes()
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          diff = (evidence / "product.diff").read_bytes()
           receipt = {
               "schema_version": 1,
               "controlled_fork_head": head,
@@ -148,7 +156,7 @@ jobs:
               "receiver_registry_integration": False,
               "external_contact": False,
           }
-          Path("fieldwork-evidence/receipt.json").write_text(
+          (evidence / "receipt.json").write_text(
               json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
           )
           print(json.dumps(receipt, indent=2))
@@ -159,6 +167,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: fieldwork-oomd-empty-initial-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: fieldwork-evidence
+          path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: error
           retention-days: 14
