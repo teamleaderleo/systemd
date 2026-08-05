@@ -124,6 +124,33 @@ TEST(batch_withdrawals_commit_together) {
         ASSERT_EQ(oomd_reporter_adapter_size(adapter), 0U);
 }
 
+TEST(empty_update_array_is_an_active_generation_noop) {
+        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
+
+        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
+        (void) connect_and_activate(adapter, 1, 7000, false);
+
+        ASSERT_OK(oomd_reporter_adapter_apply_updates(adapter, 1, NULL, 0));
+        ASSERT_EQ(effective_pressure(adapter), 7000U);
+        ASSERT_EQ(oomd_reporter_adapter_size(adapter), 1U);
+}
+
+TEST(null_path_is_rejected_without_state_change) {
+        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
+        OomdPolicyValue pressure = { .pressure_limit = 7100 };
+        OomdPolicySnapshotEntry entries[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, NULL, &pressure },
+        };
+
+        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
+        (void) connect_and_activate(adapter, 1, 7000, false);
+
+        ASSERT_ERROR(oomd_reporter_adapter_apply_updates(
+                             adapter, 1, entries, ELEMENTSOF(entries)), EINVAL);
+        ASSERT_EQ(effective_pressure(adapter), 7000U);
+        ASSERT_EQ(oomd_reporter_adapter_size(adapter), 1U);
+}
+
 TEST(pending_generation_cannot_apply_update_array) {
         _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
         OomdReporterAdapterEvent event;
