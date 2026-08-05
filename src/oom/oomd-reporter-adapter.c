@@ -81,6 +81,19 @@ static OomdReporterAuthorityState *find_authority(
         return NULL;
 }
 
+static bool link_id_referenced(OomdReporterAdapter *adapter, OomdReporterLinkId link_id) {
+        assert(adapter);
+
+        if (find_link(adapter, link_id))
+                return true;
+
+        FOREACH_ARRAY(state, adapter->authorities, adapter->n_authorities)
+                if (state->active_link_id == link_id || state->pending_link_id == link_id)
+                        return true;
+
+        return false;
+}
+
 static void event_reset(OomdReporterAdapterEvent *event) {
         assert(event);
         *event = (OomdReporterAdapterEvent) {
@@ -152,7 +165,7 @@ int oomd_reporter_adapter_connect(
 
         if (link_id == 0 || !authority_valid(authority))
                 return -EINVAL;
-        if (find_link(adapter, link_id))
+        if (link_id_referenced(adapter, link_id))
                 return -EEXIST;
 
         state = find_authority(adapter, authority);
