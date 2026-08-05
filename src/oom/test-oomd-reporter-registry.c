@@ -77,6 +77,33 @@ TEST(failed_replacement_keeps_old_generation_and_policy) {
         ASSERT_EQ(effective_pressure(registry), 7100U);
 }
 
+TEST(connected_active_remains_writable_while_replacement_is_pending) {
+        _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
+        OomdPolicyValue active_update = { .pressure_limit = 7100 };
+        OomdPolicyValue pending_update = { .pressure_limit = 7200 };
+        OomdPolicyValue replacement = { .pressure_limit = 6000 };
+        OomdPolicySnapshotEntry entries[] = {
+                { OOMD_POLICY_MEMORY_PRESSURE, PATH, &replacement },
+        };
+        OomdReporterSession first, second;
+
+        ASSERT_OK(oomd_reporter_registry_new(&registry));
+        first = activate_pressure(registry, user_authority, 7000);
+        second = begin_session(registry, user_authority);
+
+        ASSERT_OK(oomd_reporter_registry_update(
+                          registry, first, OOMD_POLICY_MEMORY_PRESSURE, PATH, &active_update));
+        ASSERT_ERROR(oomd_reporter_registry_update(
+                             registry, second, OOMD_POLICY_MEMORY_PRESSURE, PATH, &pending_update), ESTALE);
+        ASSERT_EQ(effective_pressure(registry), 7100U);
+
+        ASSERT_OK(oomd_reporter_registry_replace_snapshot(
+                          registry, second, entries, ELEMENTSOF(entries)));
+        ASSERT_EQ(effective_pressure(registry), 6000U);
+        ASSERT_ERROR(oomd_reporter_registry_update(
+                             registry, first, OOMD_POLICY_MEMORY_PRESSURE, PATH, &active_update), ESTALE);
+}
+
 TEST(valid_replacement_promotes_new_generation) {
         _cleanup_(oomd_reporter_registry_freep) OomdReporterRegistry *registry = NULL;
         OomdPolicyValue stale_update = { .pressure_limit = 7200 };
