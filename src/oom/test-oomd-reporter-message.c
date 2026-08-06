@@ -43,6 +43,7 @@ TEST(valid_message_is_owned_and_normalized) {
                         &parameters);
 
         ASSERT_OK(oomd_reporter_message_parse(parameters, &message));
+        parameters = sd_json_variant_unref(parameters);
         ASSERT_EQ(oomd_reporter_message_size(message), 3U);
 
         entries = oomd_reporter_message_entries(message);
@@ -89,6 +90,43 @@ TEST(auto_with_configured_pressure_fields_is_a_withdrawal) {
         assert_se(!entries[0].value);
 }
 
+TEST(extension_and_irrelevant_fields_are_normalized) {
+        _cleanup_(sd_json_variant_unrefp) sd_json_variant *parameters = NULL;
+        _cleanup_(oomd_reporter_message_freep) OomdReporterMessage *message = NULL;
+        const OomdPolicySnapshotEntry *entries;
+
+        parse_parameters(
+                        "{\"futureTopLevel\":true,\"cgroups\":["
+                        "{\"mode\":\"kill\",\"path\":\"/swap\",\"property\":\"ManagedOOMSwap\",\"limit\":1,\"duration\":2,\"rules\":[\"ignored\"],\"future\":{}},"
+                        "{\"mode\":\"kill\",\"path\":\"/pressure\",\"property\":\"ManagedOOMMemoryPressure\",\"limit\":5000,\"duration\":2000000,\"rules\":[\"ignored\"]},"
+                        "{\"mode\":\"kill\",\"path\":\"/rules\",\"property\":\"OOMRules\",\"limit\":1,\"duration\":2,\"rules\":[\"desktop\"]}"
+                        "]}",
+                        &parameters);
+
+        ASSERT_OK(oomd_reporter_message_parse(parameters, &message));
+        ASSERT_EQ(oomd_reporter_message_size(message), 3U);
+        entries = oomd_reporter_message_entries(message);
+        assert_se(entries);
+
+        ASSERT_EQ(entries[0].property, OOMD_POLICY_SWAP);
+        assert_se(entries[0].value);
+        ASSERT_EQ(entries[0].value->pressure_limit, 0U);
+        ASSERT_EQ(entries[0].value->pressure_duration_usec, 0U);
+        assert_se(strv_isempty(entries[0].value->rules));
+
+        ASSERT_EQ(entries[1].property, OOMD_POLICY_MEMORY_PRESSURE);
+        assert_se(entries[1].value);
+        ASSERT_EQ(entries[1].value->pressure_limit, 5000U);
+        ASSERT_EQ(entries[1].value->pressure_duration_usec, 2000000U);
+        assert_se(strv_isempty(entries[1].value->rules));
+
+        ASSERT_EQ(entries[2].property, OOMD_POLICY_RULES);
+        assert_se(entries[2].value);
+        ASSERT_EQ(entries[2].value->pressure_limit, 0U);
+        ASSERT_EQ(entries[2].value->pressure_duration_usec, 0U);
+        assert_se(strv_equal(entries[2].value->rules, STRV_MAKE("desktop")));
+}
+
 TEST(malformed_later_element_rejects_the_complete_message) {
         _cleanup_(sd_json_variant_unrefp) sd_json_variant *parameters = NULL;
         _cleanup_(oomd_reporter_message_freep) OomdReporterMessage *message = NULL;
@@ -113,10 +151,9 @@ TEST(non_object_element_is_rejected) {
         assert_se(!message);
 }
 
-TEST(unknown_or_incompatible_fields_are_rejected) {
+TEST(unknown_property_or_mode_is_rejected) {
         _cleanup_(sd_json_variant_unrefp) sd_json_variant *unknown_property = NULL;
-        _cleanup_(sd_json_variant_unrefp) sd_json_variant *unknown_field = NULL;
-        _cleanup_(sd_json_variant_unrefp) sd_json_variant *swap_payload = NULL;
+        _cleanup_(sd_json_variant_unrefp) sd_json_variant *unknown_mode = NULL;
         _cleanup_(oomd_reporter_message_freep) OomdReporterMessage *message = NULL;
 
         parse_parameters(
@@ -126,15 +163,9 @@ TEST(unknown_or_incompatible_fields_are_rejected) {
         assert_se(!message);
 
         parse_parameters(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/x\",\"property\":\"ManagedOOMSwap\",\"extra\":true}]}",
-                        &unknown_field);
-        ASSERT_LT(oomd_reporter_message_parse(unknown_field, &message), 0);
-        assert_se(!message);
-
-        parse_parameters(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/x\",\"property\":\"ManagedOOMSwap\",\"limit\":1}]}",
-                        &swap_payload);
-        ASSERT_ERROR(oomd_reporter_message_parse(swap_payload, &message), EINVAL);
+                        "{\"cgroups\":[{\"mode\":\"future\",\"path\":\"/x\",\"property\":\"ManagedOOMSwap\"}]}",
+                        &unknown_mode);
+        ASSERT_ERROR(oomd_reporter_message_parse(unknown_mode, &message), EINVAL);
         assert_se(!message);
 }
 
