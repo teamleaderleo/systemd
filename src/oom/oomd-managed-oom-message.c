@@ -47,7 +47,7 @@ static int property_from_string(const char *property, OomdPolicyProperty *ret) {
         else if (streq(property, "OOMRules"))
                 *ret = OOMD_POLICY_RULES;
         else
-                return -EINVAL;
+                return -EOPNOTSUPP;
 
         return 0;
 }
@@ -163,6 +163,12 @@ int oomd_managed_oom_message_batch_parse(
                 if (r < 0)
                         return r;
 
+                r = property_from_string(message.property, &property);
+                if (r == -EOPNOTSUPP)
+                        continue;
+                if (r < 0)
+                        return r;
+
                 if (isempty(message.path)) {
                         free(message.path);
                         message.path = strdup("/");
@@ -173,15 +179,11 @@ int oomd_managed_oom_message_batch_parse(
                 if (!path_is_absolute(message.path) || !path_is_normalized(message.path))
                         return -EINVAL;
 
-                r = property_from_string(message.property, &property);
-                if (r < 0)
-                        return r;
-
                 r = validate_property_value(&message, property);
                 if (r < 0)
                         return r;
 
-                for (size_t j = 0; j < i; j++)
+                for (size_t j = 0; j < batch.n_items; j++)
                         if (same_message_key(batch.items + j, property, message.path))
                                 return -EEXIST;
 
@@ -211,7 +213,7 @@ int oomd_managed_oom_message_batch_parse(
                                 assert_not_reached();
                         }
 
-                batch.items[i] = (OomdManagedOOMMessage) {
+                batch.items[batch.n_items++] = (OomdManagedOOMMessage) {
                         .mode = message.mode,
                         .property = property,
                         .path = TAKE_PTR(message.path),
@@ -219,8 +221,10 @@ int oomd_managed_oom_message_batch_parse(
                         .duration = message.duration,
                         .rules = TAKE_PTR(message.rules),
                 };
-                batch.n_items++;
         }
+
+        if (batch.n_items == 0)
+                batch.items = mfree(batch.items);
 
         *ret = batch;
         batch = (OomdManagedOOMMessageBatch) {};
