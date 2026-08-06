@@ -124,10 +124,10 @@ TEST(unknown_property_is_fatal_for_the_message) {
 TEST(unknown_fields_are_not_silently_accepted) {
         assert_parse_error(
                         "{\"cgroups\":[],\"future\":true}",
-                        EINVAL);
+                        EADDRNOTAVAIL);
         assert_parse_error(
                         "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\",\"future\":true}]}",
-                        EINVAL);
+                        EADDRNOTAVAIL);
 }
 
 TEST(non_normalized_or_relative_paths_are_rejected) {
@@ -175,7 +175,7 @@ TEST(parse_failure_clears_the_output_batch) {
 }
 
 TEST(missing_or_wrong_cgroups_field_is_rejected) {
-        assert_parse_error("{}", EINVAL);
+        assert_parse_error("{}", ENXIO);
         assert_parse_error("{\"cgroups\":{}}", EINVAL);
 }
 
