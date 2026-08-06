@@ -94,6 +94,8 @@ int oomd_reporter_message_parse(
         assert(parameters);
         assert(ret);
 
+        *ret = NULL;
+
         r = sd_json_dispatch(parameters, parameters_dispatch_table, SD_JSON_STRICT, &raw_parameters);
         if (r < 0)
                 return r;
@@ -149,9 +151,9 @@ int oomd_reporter_message_parse(
                         if (message->entries[j].property == property && streq(message->paths[j], path))
                                 return -EEXIST;
 
-                has_limit = sd_json_variant_by_key(element, "limit");
-                has_duration = sd_json_variant_by_key(element, "duration");
-                has_rules = sd_json_variant_by_key(element, "rules");
+                has_limit = sd_json_variant_by_key(element, "limit") != NULL;
+                has_duration = sd_json_variant_by_key(element, "duration") != NULL;
+                has_rules = sd_json_variant_by_key(element, "rules") != NULL;
 
                 message->paths[i] = TAKE_PTR(path);
                 message->entries[i] = (OomdPolicySnapshotEntry) {
@@ -160,9 +162,9 @@ int oomd_reporter_message_parse(
                 };
 
                 if (is_auto) {
-                        if (has_limit || has_duration || has_rules)
-                                return -EINVAL;
-
+                        /* The current manager sender may include configured pressure fields while changing
+                         * the mode to auto. Existing oomd semantics ignore those fields and withdraw the
+                         * property, so retain that wire compatibility while making the withdrawal explicit. */
                         continue;
                 }
 
