@@ -38,19 +38,20 @@ jobs:
           end_marker = '\n                if (userns_fd >= 0 && unshare(CLONE_NEWNS) < 0) {'
           end = text.index(end_marker, start)
 
-          new = '''                if (userns_fd >= 0) {
-                        r = namespace_enter(
-                                        /* pidns_fd= */ -EBADF,
-                                        /* mntns_fd= */ -EBADF,
-                                        /* netns_fd= */ -EBADF,
-                                        userns_fd,
-                                        /* root_fd= */ -EBADF);
-                        if (r < 0) {
-                                log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
-                                _exit(EXIT_FAILURE);
-                        }
-                }
-          '''.rstrip('\n')
+          new = '\n'.join([
+              ' ' * 16 + 'if (userns_fd >= 0) {',
+              ' ' * 24 + 'r = namespace_enter(',
+              ' ' * 40 + '/* pidns_fd= */ -EBADF,',
+              ' ' * 40 + '/* mntns_fd= */ -EBADF,',
+              ' ' * 40 + '/* netns_fd= */ -EBADF,',
+              ' ' * 40 + 'userns_fd,',
+              ' ' * 40 + '/* root_fd= */ -EBADF);',
+              ' ' * 24 + 'if (r < 0) {',
+              ' ' * 32 + 'log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");',
+              ' ' * 32 + '_exit(EXIT_FAILURE);',
+              ' ' * 24 + '}',
+              ' ' * 16 + '}',
+          ])
 
           path.write_text(text[:start] + new + text[end:])
           PY
@@ -62,6 +63,10 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          if git diff --quiet -- src/vmspawn/vmspawn.c; then
+            echo 'Guard formatting already normalized.'
+            exit 0
+          fi
           git config user.name 'Linux Fieldwork'
           git config user.email 'fieldwork@example.invalid'
           git add src/vmspawn/vmspawn.c
