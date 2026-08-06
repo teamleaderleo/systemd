@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 
 #include <errno.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "alloc-util.h"
@@ -54,10 +53,7 @@ static int property_from_string(const char *property, OomdPolicyProperty *ret) {
 
 static int validate_property_value(
                 const ManagedOOMWireMessage *message,
-                OomdPolicyProperty property,
-                bool has_limit,
-                bool has_duration,
-                bool has_rules) {
+                OomdPolicyProperty property) {
 
         assert(message);
 
@@ -68,19 +64,13 @@ static int validate_property_value(
 
         assert(message->mode == MANAGED_OOM_KILL);
 
-        switch (property) {
-        case OOMD_POLICY_SWAP:
-                return has_limit || has_duration || has_rules ? -EINVAL : 0;
+        /* Existing receive semantics ignore fields that are irrelevant to the selected property.
+         * The parser canonicalizes those fields below instead of turning an accepted wire shape
+         * into a mixed-version failure. A kill-mode rules subscription still needs actual rules. */
+        if (property == OOMD_POLICY_RULES && strv_isempty(message->rules))
+                return -EINVAL;
 
-        case OOMD_POLICY_MEMORY_PRESSURE:
-                return has_rules ? -EINVAL : 0;
-
-        case OOMD_POLICY_RULES:
-                return has_limit || has_duration || strv_isempty(message->rules) ? -EINVAL : 0;
-
-        default:
-                assert_not_reached();
-        }
+        return 0;
 }
 
 static bool same_message_key(
@@ -137,7 +127,11 @@ int oomd_managed_oom_message_batch_parse(
         if (!sd_json_variant_is_object(parameters))
                 return -EINVAL;
 
-        r = sd_json_dispatch(parameters, envelope_dispatch_table, SD_JSON_STRICT, &envelope);
+        r = sd_json_dispatch(
+                        parameters,
+                        envelope_dispatch_table,
+                        SD_JSON_STRICT|SD_JSON_ALLOW_EXTENSIONS,
+                        &envelope);
         if (r < 0)
                 return r;
 
@@ -153,7 +147,6 @@ int oomd_managed_oom_message_batch_parse(
                 _cleanup_(managed_oom_wire_message_done) ManagedOOMWireMessage message = {
                         .duration = USEC_INFINITY,
                 };
-                bool has_duration, has_limit, has_rules;
                 OomdPolicyProperty property;
                 sd_json_variant *element;
 
@@ -161,7 +154,11 @@ int oomd_managed_oom_message_batch_parse(
                 if (!sd_json_variant_is_object(element))
                         return -EINVAL;
 
-                r = sd_json_dispatch(element, message_dispatch_table, SD_JSON_STRICT, &message);
+                r = sd_json_dispatch(
+                                element,
+                                message_dispatch_table,
+                                SD_JSON_STRICT|SD_JSON_ALLOW_EXTENSIONS,
+                                &message);
                 if (r < 0)
                         return r;
 
@@ -179,11 +176,7 @@ int oomd_managed_oom_message_batch_parse(
                 if (r < 0)
                         return r;
 
-                has_limit = sd_json_variant_by_key(element, "limit") != NULL;
-                has_duration = sd_json_variant_by_key(element, "duration") != NULL;
-                has_rules = sd_json_variant_by_key(element, "rules") != NULL;
-
-                r = validate_property_value(&message, property, has_limit, has_duration, has_rules);
+                r = validate_property_value(&message, property);
                 if (r < 0)
                         return r;
 
@@ -195,8 +188,27 @@ int oomd_managed_oom_message_batch_parse(
                         message.limit = 0;
                         message.duration = USEC_INFINITY;
                         message.rules = strv_free(message.rules);
-                } else if (property == OOMD_POLICY_RULES)
-                        strv_uniq(message.rules);
+                } else
+                        switch (property) {
+                        case OOMD_POLICY_SWAP:
+                                message.limit = 0;
+                                message.duration = USEC_INFINITY;
+                                message.rules = strv_free(message.rules);
+                                break;
+
+                        case OOMD_POLICY_MEMORY_PRESSURE:
+                                message.rules = strv_free(message.rules);
+                                break;
+
+                        case OOMD_POLICY_RULES:
+                                message.limit = 0;
+                                message.duration = USEC_INFINITY;
+                                strv_uniq(message.rules);
+                                break;
+
+                        default:
+                                assert_not_reached();
+                        }
 
                 batch.items[i] = (OomdManagedOOMMessage) {
                         .mode = message.mode,
