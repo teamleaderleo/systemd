@@ -7,6 +7,7 @@
 #include "oomd-managed-oom-resolver.h"
 #include "path-util.h"
 #include "percent-util.h"
+#include "string-util.h"
 #include "strv.h"
 #include "user-util.h"
 
@@ -34,6 +35,17 @@ static bool defaults_valid(const OomdManagedOOMDefaults *defaults) {
                defaults->memory_pressure_duration_usec != USEC_INFINITY;
 }
 
+static bool same_message_key(
+                const OomdManagedOOMMessage *a,
+                OomdPolicyProperty property,
+                const char *path) {
+
+        assert(a);
+        assert(path);
+
+        return a->property == property && streq(a->path, path);
+}
+
 static int validate_message(const OomdManagedOOMMessageBatch *message) {
         assert(message);
         assert(message->items || message->n_items == 0);
@@ -58,17 +70,6 @@ static int validate_message(const OomdManagedOOMMessageBatch *message) {
         }
 
         return 0;
-}
-
-static bool same_message_key(
-                const OomdManagedOOMMessage *a,
-                OomdPolicyProperty property,
-                const char *path) {
-
-        assert(a);
-        assert(path);
-
-        return a->property == property && streq(a->path, path);
 }
 
 static int authorize_message(
