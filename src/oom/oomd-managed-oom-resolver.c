@@ -105,7 +105,7 @@ int oomd_managed_oom_policy_batch_resolve(
         assert(messages->items || messages->n_items == 0);
         assert(ret);
 
-        *ret = (OomdManagedOOMPolicyBatch) {};
+        oomd_managed_oom_policy_batch_done(ret);
 
         if (!authority_valid(authority))
                 return -EINVAL;
