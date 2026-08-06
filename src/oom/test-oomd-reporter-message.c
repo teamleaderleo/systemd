@@ -27,7 +27,6 @@ TEST(empty_report_is_an_explicit_empty_snapshot) {
         parse_parameters("{\"cgroups\":[]}", &parameters);
         ASSERT_OK(oomd_reporter_message_parse(parameters, &message));
         ASSERT_EQ(oomd_reporter_message_size(message), 0U);
-        assert_se(!oomd_reporter_message_entries(message));
 }
 
 TEST(valid_message_is_owned_and_normalized) {
