@@ -1,0 +1,65 @@
+name: Fieldwork OOMD session token GC
+
+on:
+  push:
+    branches:
+      - linux-fieldwork/oomd-session-token-gc
+  pull_request:
+    paths:
+      - contrib/fieldwork/oomd-session-token-gc.c
+      - .github/workflows/fieldwork-oomd-session-token-gc.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  session-token-gc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify execution identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected"
+          mkdir -p fieldwork-evidence
+          {
+            echo "EXPECTED_HEAD=$expected"
+            echo "ACTUAL_HEAD=$actual"
+            echo "MODEL_BLOB=$(git rev-parse HEAD:contrib/fieldwork/oomd-session-token-gc.c)"
+            echo "PRODUCT_SOURCE_CHANGED=false"
+            echo "MANAGER_INTEGRATION=false"
+            echo "EXTERNAL_CONTACT=false"
+          } | tee fieldwork-evidence/receipt.txt
+
+      - name: Compile strict C11 model
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -pedantic contrib/fieldwork/oomd-session-token-gc.c -o fieldwork-evidence/oomd-session-token-gc
+
+      - name: Run session-token collection model
+        shell: bash
+        run: |
+          set -euxo pipefail
+          fieldwork-evidence/oomd-session-token-gc | tee fieldwork-evidence/test.log
+          grep -Fxq 'FIELDWORK_OOMD_SESSION_TOKEN_GC=PASSED' fieldwork-evidence/test.log
+
+      - name: Verify clean diff
+        run: git diff --exit-code
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fieldwork-oomd-session-token-gc-${{ github.run_id }}-${{ github.run_attempt }}
+          path: fieldwork-evidence
+          if-no-files-found: error
