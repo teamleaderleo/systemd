@@ -6,7 +6,6 @@
 
 typedef struct OomdReporterLifecycleState {
         OomdReporterAuthority authority;
-        uint64_t last_generation;
         uint64_t active_generation;
         uint64_t pending_generation;
         bool active_connected;
@@ -16,6 +15,7 @@ typedef struct OomdReporterLifecycleState {
 struct OomdReporterLifecycle {
         OomdReporterLifecycleState *states;
         size_t n_states;
+        uint64_t last_generation;
 };
 
 static bool authority_valid(OomdReporterAuthority authority) {
@@ -76,6 +76,38 @@ static int ensure_state(
         return 0;
 }
 
+static void remove_state(
+                OomdReporterLifecycle *lifecycle,
+                OomdReporterLifecycleState *state) {
+
+        size_t i;
+
+        assert(lifecycle);
+        assert(state);
+        assert(state >= lifecycle->states);
+        assert(state < lifecycle->states + lifecycle->n_states);
+
+        i = (size_t) (state - lifecycle->states);
+        lifecycle->states[i] = lifecycle->states[--lifecycle->n_states];
+        if (lifecycle->n_states == 0)
+                lifecycle->states = mfree(lifecycle->states);
+}
+
+static void collect_state_if_dormant(
+                OomdReporterLifecycle *lifecycle,
+                OomdReporterLifecycleState *state) {
+
+        assert(lifecycle);
+        assert(state);
+
+        if (state->active_generation != 0 || state->pending_generation != 0)
+                return;
+
+        assert(!state->active_connected);
+        assert(!state->pending_connected);
+        remove_state(lifecycle, state);
+}
+
 OomdReporterLifecycle *oomd_reporter_lifecycle_free(OomdReporterLifecycle *lifecycle) {
         if (!lifecycle)
                 return NULL;
@@ -103,6 +135,7 @@ int oomd_reporter_lifecycle_begin(
                 OomdReporterSession *ret_session) {
 
         OomdReporterLifecycleState *state;
+        uint64_t generation;
         int r;
 
         assert(lifecycle);
@@ -111,13 +144,16 @@ int oomd_reporter_lifecycle_begin(
         if (!authority_valid(authority))
                 return -EINVAL;
 
+        if (lifecycle->last_generation == UINT64_MAX)
+                return -EOVERFLOW;
+        generation = lifecycle->last_generation + 1;
+
         r = ensure_state(lifecycle, authority, &state);
         if (r < 0)
                 return r;
-        if (state->last_generation == UINT64_MAX)
-                return -EOVERFLOW;
 
-        state->pending_generation = ++state->last_generation;
+        lifecycle->last_generation = generation;
+        state->pending_generation = generation;
         state->pending_connected = true;
         *ret_session = (OomdReporterSession) {
                 .authority = authority,
@@ -270,6 +306,7 @@ int oomd_reporter_lifecycle_commit(
 
                 state->pending_generation = 0;
                 state->pending_connected = false;
+                collect_state_if_dormant(lifecycle, state);
                 return 0;
 
         case OOMD_REPORTER_LIFECYCLE_TRANSITION_DISCONNECT_ACTIVE:
@@ -285,6 +322,7 @@ int oomd_reporter_lifecycle_commit(
                         state->active_generation = 0;
                         state->active_connected = false;
                 }
+                collect_state_if_dormant(lifecycle, state);
                 return 0;
 
         case OOMD_REPORTER_LIFECYCLE_TRANSITION_EXPIRE_PENDING_GRACE:
@@ -318,4 +356,10 @@ int oomd_reporter_lifecycle_accepts_incremental(
         return state &&
                state->active_connected &&
                state->active_generation == session.generation;
+}
+
+size_t oomd_reporter_lifecycle_size(OomdReporterLifecycle *lifecycle) {
+        assert(lifecycle);
+
+        return lifecycle->n_states;
 }
