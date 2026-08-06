@@ -123,7 +123,7 @@ int oomd_managed_oom_message_batch_parse(
         assert(parameters);
         assert(ret);
 
-        *ret = (OomdManagedOOMMessageBatch) {};
+        oomd_managed_oom_message_batch_done(ret);
 
         if (!sd_json_variant_is_object(parameters))
                 return -EINVAL;
