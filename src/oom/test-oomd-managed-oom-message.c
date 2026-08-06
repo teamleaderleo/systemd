@@ -23,6 +23,7 @@ static void assert_parse_error(const char *text, int expected) {
 
         ASSERT_ERROR(parse_text(text, &batch), expected);
         ASSERT_EQ(batch.n_items, 0U);
+        assert_se(!batch.items);
 }
 
 TEST(empty_report_is_a_valid_owned_batch) {
@@ -30,6 +31,7 @@ TEST(empty_report_is_a_valid_owned_batch) {
 
         ASSERT_OK(parse_text("{\"cgroups\":[]}", &batch));
         ASSERT_EQ(batch.n_items, 0U);
+        assert_se(!batch.items);
 }
 
 TEST(valid_report_is_typed_and_independent_of_json_storage) {
@@ -39,7 +41,7 @@ TEST(valid_report_is_typed_and_independent_of_json_storage) {
                           "{\"cgroups\":["
                           "{\"mode\":\"kill\",\"path\":\"/user.slice/user-4711.slice\",\"property\":\"ManagedOOMMemoryPressure\",\"limit\":7000,\"duration\":5000000},"
                           "{\"mode\":\"kill\",\"path\":\"/user.slice/user-4711.slice\",\"property\":\"ManagedOOMSwap\"},"
-                          "{\"mode\":\"kill\",\"path\":\"/user.slice/user-4711.slice\",\"property\":\"OOMRules\",\"rules\":[\"desktop\",\"batch\"]}"
+                          "{\"mode\":\"kill\",\"path\":\"/user.slice/user-4711.slice\",\"property\":\"OOMRules\",\"rules\":[\"desktop\",\"desktop\",\"batch\"]}"
                           "]}",
                           &batch));
 
@@ -58,6 +60,25 @@ TEST(valid_report_is_typed_and_independent_of_json_storage) {
         ASSERT_EQ(strv_length(batch.items[2].rules), 2U);
         ASSERT_STREQ(batch.items[2].rules[0], "desktop");
         ASSERT_STREQ(batch.items[2].rules[1], "batch");
+}
+
+TEST(auto_metadata_is_canonicalized_to_a_withdrawal) {
+        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {};
+
+        ASSERT_OK(parse_text(
+                          "{\"cgroups\":["
+                          "{\"mode\":\"auto\",\"path\":\"/pressure.slice\",\"property\":\"ManagedOOMMemoryPressure\",\"limit\":7000,\"duration\":5000000},"
+                          "{\"mode\":\"auto\",\"path\":\"/rules.slice\",\"property\":\"OOMRules\",\"rules\":[\"stale\"]}"
+                          "]}",
+                          &batch));
+
+        ASSERT_EQ(batch.n_items, 2U);
+        FOREACH_ARRAY(item, batch.items, batch.n_items) {
+                ASSERT_EQ(item->mode, MANAGED_OOM_AUTO);
+                ASSERT_EQ(item->limit, 0U);
+                ASSERT_EQ(item->duration, USEC_INFINITY);
+                assert_se(strv_isempty(item->rules));
+        }
 }
 
 TEST(empty_path_is_canonical_root) {
@@ -127,16 +148,30 @@ TEST(duplicate_property_path_keys_are_rejected) {
                         EEXIST);
 }
 
-TEST(rules_require_consistent_mode_and_property) {
+TEST(kill_payloads_must_match_the_property) {
         assert_parse_error(
                         "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"OOMRules\"}]}",
                         EINVAL);
         assert_parse_error(
-                        "{\"cgroups\":[{\"mode\":\"auto\",\"path\":\"/a.slice\",\"property\":\"OOMRules\",\"rules\":[\"desktop\"]}]}",
-                        EINVAL);
-        assert_parse_error(
                         "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\",\"rules\":[\"desktop\"]}]}",
                         EINVAL);
+        assert_parse_error(
+                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\",\"limit\":1}]}",
+                        EINVAL);
+        assert_parse_error(
+                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"OOMRules\",\"duration\":1,\"rules\":[\"desktop\"]}]}",
+                        EINVAL);
+}
+
+TEST(parse_failure_clears_the_output_batch) {
+        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {
+                .items = UINT_TO_PTR(1),
+                .n_items = 1,
+        };
+
+        ASSERT_ERROR(parse_text("{\"cgroups\":[null]}", &batch), EINVAL);
+        assert_se(!batch.items);
+        ASSERT_EQ(batch.n_items, 0U);
 }
 
 TEST(missing_or_wrong_cgroups_field_is_rejected) {
