@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "oomd-policy.h"
@@ -66,5 +67,7 @@ int oomd_reporter_lifecycle_commit(
 int oomd_reporter_lifecycle_accepts_incremental(
                 OomdReporterLifecycle *lifecycle,
                 OomdReporterSession session);
+
+size_t oomd_reporter_lifecycle_size(OomdReporterLifecycle *lifecycle);
 
 DEFINE_TRIVIAL_CLEANUP_FUNC(OomdReporterLifecycle*, oomd_reporter_lifecycle_free);
