@@ -31,7 +31,6 @@ TEST(empty_report_is_a_valid_owned_batch) {
 
         ASSERT_OK(parse_text("{\"cgroups\":[]}", &batch));
         ASSERT_EQ(batch.n_items, 0U);
-        assert_se(!batch.items);
 }
 
 TEST(valid_report_is_typed_and_independent_of_json_storage) {
@@ -81,6 +80,36 @@ TEST(auto_metadata_is_canonicalized_to_a_withdrawal) {
         }
 }
 
+TEST(extension_and_irrelevant_fields_are_normalized) {
+        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {};
+
+        ASSERT_OK(parse_text(
+                          "{\"futureTopLevel\":true,\"cgroups\":["
+                          "{\"mode\":\"kill\",\"path\":\"/swap.slice\",\"property\":\"ManagedOOMSwap\",\"limit\":1,\"duration\":2,\"rules\":[\"ignored\"],\"future\":{}},"
+                          "{\"mode\":\"kill\",\"path\":\"/pressure.slice\",\"property\":\"ManagedOOMMemoryPressure\",\"limit\":7000,\"duration\":5000000,\"rules\":[\"ignored\"]},"
+                          "{\"mode\":\"kill\",\"path\":\"/rules.slice\",\"property\":\"OOMRules\",\"limit\":1,\"duration\":2,\"rules\":[\"desktop\"]}"
+                          "]}",
+                          &batch));
+
+        ASSERT_EQ(batch.n_items, 3U);
+
+        ASSERT_EQ(batch.items[0].property, OOMD_POLICY_SWAP);
+        ASSERT_EQ(batch.items[0].limit, 0U);
+        ASSERT_EQ(batch.items[0].duration, USEC_INFINITY);
+        assert_se(strv_isempty(batch.items[0].rules));
+
+        ASSERT_EQ(batch.items[1].property, OOMD_POLICY_MEMORY_PRESSURE);
+        ASSERT_EQ(batch.items[1].limit, 7000U);
+        ASSERT_EQ(batch.items[1].duration, UINT64_C(5000000));
+        assert_se(strv_isempty(batch.items[1].rules));
+
+        ASSERT_EQ(batch.items[2].property, OOMD_POLICY_RULES);
+        ASSERT_EQ(batch.items[2].limit, 0U);
+        ASSERT_EQ(batch.items[2].duration, USEC_INFINITY);
+        ASSERT_EQ(strv_length(batch.items[2].rules), 1U);
+        ASSERT_STREQ(batch.items[2].rules[0], "desktop");
+}
+
 TEST(empty_path_is_canonical_root) {
         _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {};
 
@@ -115,19 +144,27 @@ TEST(non_object_element_is_fatal_for_the_message) {
                         EINVAL);
 }
 
-TEST(unknown_property_is_fatal_for_the_message) {
+TEST(unknown_property_or_mode_is_fatal_for_the_message) {
         assert_parse_error(
                         "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMFuture\"}]}",
                         EINVAL);
+        assert_parse_error(
+                        "{\"cgroups\":[{\"mode\":\"future\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\"}]}",
+                        EINVAL);
 }
 
-TEST(unknown_fields_are_not_silently_accepted) {
-        assert_parse_error(
-                        "{\"cgroups\":[],\"future\":true}",
-                        EADDRNOTAVAIL);
-        assert_parse_error(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\",\"future\":true}]}",
-                        EADDRNOTAVAIL);
+TEST(duplicate_object_keys_are_rejected) {
+        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {};
+
+        ASSERT_LT(parse_text("{\"cgroups\":[],\"cgroups\":[]}", &batch), 0);
+        ASSERT_EQ(batch.n_items, 0U);
+        assert_se(!batch.items);
+
+        ASSERT_LT(parse_text(
+                          "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"path\":\"/b.slice\",\"property\":\"ManagedOOMSwap\"}]}",
+                          &batch), 0);
+        ASSERT_EQ(batch.n_items, 0U);
+        assert_se(!batch.items);
 }
 
 TEST(non_normalized_or_relative_paths_are_rejected) {
@@ -148,18 +185,12 @@ TEST(duplicate_property_path_keys_are_rejected) {
                         EEXIST);
 }
 
-TEST(kill_payloads_must_match_the_property) {
+TEST(kill_rules_require_a_nonempty_rules_list) {
         assert_parse_error(
                         "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"OOMRules\"}]}",
                         EINVAL);
         assert_parse_error(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\",\"rules\":[\"desktop\"]}]}",
-                        EINVAL);
-        assert_parse_error(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\",\"limit\":1}]}",
-                        EINVAL);
-        assert_parse_error(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"OOMRules\",\"duration\":1,\"rules\":[\"desktop\"]}]}",
+                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"OOMRules\",\"rules\":[]}]}",
                         EINVAL);
 }
 
