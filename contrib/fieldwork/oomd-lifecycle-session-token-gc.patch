@@ -1,0 +1,233 @@
+diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle.c
+--- a/src/oom/oomd-reporter-lifecycle.c
++++ b/src/oom/oomd-reporter-lifecycle.c
+@@ -7,12 +7,12 @@ typedef struct OomdReporterLifecycleState {
+         OomdReporterAuthority authority;
+-        uint64_t last_generation;
+         uint64_t active_generation;
+         uint64_t pending_generation;
+         bool active_connected;
+         bool pending_connected;
+ } OomdReporterLifecycleState;
+ 
+ struct OomdReporterLifecycle {
+         OomdReporterLifecycleState *states;
+         size_t n_states;
++        uint64_t last_generation;
+ };
+@@ -76,3 +76,32 @@ static int ensure_state(
+         *ret = state;
+         return 0;
+ }
++
++static void remove_state(
++                OomdReporterLifecycle *lifecycle,
++                OomdReporterLifecycleState *state) {
++
++        size_t i;
++
++        assert(lifecycle);
++        assert(state);
++        assert(state >= lifecycle->states);
++        assert(state < lifecycle->states + lifecycle->n_states);
++
++        i = (size_t) (state - lifecycle->states);
++        lifecycle->states[i] = lifecycle->states[--lifecycle->n_states];
++        if (lifecycle->n_states == 0)
++                lifecycle->states = mfree(lifecycle->states);
++}
++
++static void collect_state_if_dormant(
++                OomdReporterLifecycle *lifecycle,
++                OomdReporterLifecycleState *state) {
++
++        if (state->active_generation != 0 || state->pending_generation != 0)
++                return;
++
++        assert(!state->active_connected);
++        assert(!state->pending_connected);
++        remove_state(lifecycle, state);
++}
+@@ -113,6 +141,7 @@ int oomd_reporter_lifecycle_begin(
+                 OomdReporterSession *ret_session) {
+ 
+         OomdReporterLifecycleState *state;
++        uint64_t generation;
+         int r;
+ 
+         assert(lifecycle);
+@@ -123,13 +152,16 @@ int oomd_reporter_lifecycle_begin(
+         if (!authority_valid(authority))
+                 return -EINVAL;
+ 
++        if (lifecycle->last_generation == UINT64_MAX)
++                return -EOVERFLOW;
++        generation = lifecycle->last_generation + 1;
++
+         r = ensure_state(lifecycle, authority, &state);
+         if (r < 0)
+                 return r;
+-        if (state->last_generation == UINT64_MAX)
+-                return -EOVERFLOW;
+ 
+-        state->pending_generation = ++state->last_generation;
++        lifecycle->last_generation = generation;
++        state->pending_generation = generation;
+         state->pending_connected = true;
+         *ret_session = (OomdReporterSession) {
+                 .authority = authority,
+@@ -269,6 +301,7 @@ int oomd_reporter_lifecycle_commit(
+ 
+                 state->pending_generation = 0;
+                 state->pending_connected = false;
++                collect_state_if_dormant(lifecycle, state);
+                 return 0;
+ 
+         case OOMD_REPORTER_LIFECYCLE_TRANSITION_DISCONNECT_ACTIVE:
+@@ -288,6 +321,7 @@ int oomd_reporter_lifecycle_commit(
+                         state->active_generation = 0;
+                         state->active_connected = false;
+                 }
++                collect_state_if_dormant(lifecycle, state);
+                 return 0;
+ 
+         case OOMD_REPORTER_LIFECYCLE_TRANSITION_EXPIRE_PENDING_GRACE:
+@@ -339,3 +373,9 @@ int oomd_reporter_lifecycle_accepts_incremental(
+                state->active_connected &&
+                state->active_generation == session.generation;
+ }
++
++size_t oomd_reporter_lifecycle_size(OomdReporterLifecycle *lifecycle) {
++        assert(lifecycle);
++
++        return lifecycle->n_states;
++}
+diff --git a/src/oom/oomd-reporter-lifecycle.h b/src/oom/oomd-reporter-lifecycle.h
+--- a/src/oom/oomd-reporter-lifecycle.h
++++ b/src/oom/oomd-reporter-lifecycle.h
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include <stddef.h>
+ #include <stdint.h>
+ 
+ #include "oomd-policy.h"
+@@ -70,4 +71,6 @@ int oomd_reporter_lifecycle_accepts_incremental(
+                 OomdReporterLifecycle *lifecycle,
+                 OomdReporterSession session);
+ 
++size_t oomd_reporter_lifecycle_size(OomdReporterLifecycle *lifecycle);
++
+ DEFINE_TRIVIAL_CLEANUP_FUNC(OomdReporterLifecycle*, oomd_reporter_lifecycle_free);
+diff --git a/src/oom/test-oomd-reporter-lifecycle.c b/src/oom/test-oomd-reporter-lifecycle.c
+--- a/src/oom/test-oomd-reporter-lifecycle.c
++++ b/src/oom/test-oomd-reporter-lifecycle.c
+@@ -10,14 +10,21 @@ static const OomdReporterAuthority user_authority = {
+         .uid = 4711,
+ };
+ 
+-static OomdReporterSession begin_session(OomdReporterLifecycle *lifecycle) {
++static OomdReporterSession begin_authority(
++                OomdReporterLifecycle *lifecycle,
++                OomdReporterAuthority authority) {
++
+         OomdReporterSession session;
+ 
+-        ASSERT_OK(oomd_reporter_lifecycle_begin(lifecycle, user_authority, &session));
++        ASSERT_OK(oomd_reporter_lifecycle_begin(lifecycle, authority, &session));
+         ASSERT_GT(session.generation, 0U);
+         return session;
+ }
+ 
++static OomdReporterSession begin_session(OomdReporterLifecycle *lifecycle) {
++        return begin_authority(lifecycle, user_authority);
++}
++
+ static OomdReporterSession activate_session(OomdReporterLifecycle *lifecycle) {
+         OomdReporterLifecycleTransition transition;
+         OomdReporterSession session;
+@@ -282,4 +289,83 @@ TEST(root_user_manager_remains_distinct_and_valid) {
+         ASSERT_GT(session.generation, 0U);
+ }
+ 
++TEST(session_generations_are_global_across_authorities) {
++        _cleanup_(oomd_reporter_lifecycle_freep) OomdReporterLifecycle *lifecycle = NULL;
++        OomdReporterAuthority other_user = {
++                .kind = OOMD_REPORTER_USER_MANAGER,
++                .uid = 4712,
++        };
++        OomdReporterAuthority system = {
++                .kind = OOMD_REPORTER_SYSTEM_MANAGER,
++                .uid = 0,
++        };
++        OomdReporterLifecycleTransition transition;
++        OomdReporterSession first, second, third;
++
++        ASSERT_OK(oomd_reporter_lifecycle_new(&lifecycle));
++        first = begin_session(lifecycle);
++        second = begin_authority(lifecycle, other_user);
++        third = begin_authority(lifecycle, system);
++        ASSERT_GT(second.generation, first.generation);
++        ASSERT_GT(third.generation, second.generation);
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 3U);
++
++        ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, first, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, second, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, third, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 0U);
++}
++
++TEST(dormant_authority_state_is_collected_without_token_reuse) {
++        _cleanup_(oomd_reporter_lifecycle_freep) OomdReporterLifecycle *lifecycle = NULL;
++        OomdReporterLifecycleTransition transition;
++        OomdReporterSession old, fresh;
++
++        ASSERT_OK(oomd_reporter_lifecycle_new(&lifecycle));
++        old = activate_session(lifecycle);
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 1U);
++
++        ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, old, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 0U);
++
++        fresh = begin_session(lifecycle);
++        ASSERT_GT(fresh.generation, old.generation);
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 1U);
++        ASSERT_EQ(oomd_reporter_lifecycle_accepts_incremental(lifecycle, old), 0);
++        ASSERT_ERROR(oomd_reporter_lifecycle_prepare_snapshot(lifecycle, old, &transition), ESTALE);
++
++        ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, old, &transition));
++        ASSERT_EQ(transition.kind, OOMD_REPORTER_LIFECYCLE_TRANSITION_NONE);
++        ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 1U);
++
++        ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, fresh, &transition));
++        ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++        ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 0U);
++}
++
++TEST(uid_churn_does_not_accumulate_dormant_states) {
++        _cleanup_(oomd_reporter_lifecycle_freep) OomdReporterLifecycle *lifecycle = NULL;
++        OomdReporterLifecycleTransition transition;
++        OomdReporterSession session;
++
++        ASSERT_OK(oomd_reporter_lifecycle_new(&lifecycle));
++        for (uint32_t uid = 1; uid <= 1000; uid++) {
++                OomdReporterAuthority authority = {
++                        .kind = OOMD_REPORTER_USER_MANAGER,
++                        .uid = uid,
++                };
++
++                session = begin_authority(lifecycle, authority);
++                ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 1U);
++                ASSERT_OK(oomd_reporter_lifecycle_prepare_disconnect(lifecycle, session, &transition));
++                ASSERT_OK(oomd_reporter_lifecycle_commit(lifecycle, &transition));
++                ASSERT_EQ(oomd_reporter_lifecycle_size(lifecycle), 0U);
++        }
++}
++
+ DEFINE_TEST_MAIN(LOG_DEBUG);
