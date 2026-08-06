@@ -144,10 +144,25 @@ TEST(non_object_element_is_fatal_for_the_message) {
                         EINVAL);
 }
 
-TEST(unknown_property_or_mode_is_fatal_for_the_message) {
-        assert_parse_error(
-                        "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMFuture\"}]}",
-                        EINVAL);
+TEST(unknown_properties_are_ignored_but_unknown_modes_are_fatal) {
+        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {};
+
+        ASSERT_OK(parse_text(
+                          "{\"cgroups\":["
+                          "{\"mode\":\"kill\",\"path\":\"/future.slice\",\"property\":\"ManagedOOMFuture\"},"
+                          "{\"mode\":\"kill\",\"path\":\"/known.slice\",\"property\":\"ManagedOOMSwap\"}"
+                          "]}",
+                          &batch));
+        ASSERT_EQ(batch.n_items, 1U);
+        ASSERT_EQ(batch.items[0].property, OOMD_POLICY_SWAP);
+        ASSERT_STREQ(batch.items[0].path, "/known.slice");
+
+        ASSERT_OK(parse_text(
+                          "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/future.slice\",\"property\":\"ManagedOOMFuture\"}]}",
+                          &batch));
+        ASSERT_EQ(batch.n_items, 0U);
+        assert_se(!batch.items);
+
         assert_parse_error(
                         "{\"cgroups\":[{\"mode\":\"future\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\"}]}",
                         EINVAL);
