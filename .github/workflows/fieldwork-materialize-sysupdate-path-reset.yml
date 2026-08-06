@@ -1,0 +1,175 @@
+name: Materialize sysupdate Path reset candidate
+
+on:
+  push:
+    branches:
+      - fieldwork/sysupdate-path-empty-reset
+    paths:
+      - .github/workflows/fieldwork-materialize-sysupdate-path-reset.yml
+      - .github/fieldwork-sysupdate-path-reset-trigger
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-materialize-sysupdate-path-reset.yml
+      - .github/fieldwork-sysupdate-path-reset-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'teamleaderleo/systemd' &&
+      (github.ref_name == 'fieldwork/sysupdate-path-empty-reset' ||
+       github.head_ref == 'fieldwork/sysupdate-path-empty-reset')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact candidate branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fieldwork/sysupdate-path-empty-reset
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Materialize parser fix and focused test
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("src/sysupdate/sysupdate-transfer.c")
+          text = source.read_text()
+          needle = '''        assert(rvalue);
+
+        if (streq(rvalue, "auto")) {
+'''
+          replacement = '''        assert(rvalue);
+
+        if (isempty(rvalue)) {
+                rr->path = mfree(rr->path);
+                rr->path_auto = false;
+                return 0;
+        }
+
+        if (streq(rvalue, "auto")) {
+'''
+          if replacement not in text:
+              if text.count(needle) != 1:
+                  raise SystemExit("config_parse_resource_path anchor changed")
+              source.write_text(text.replace(needle, replacement, 1))
+
+          meson = Path("src/sysupdate/meson.build")
+          text = meson.read_text()
+          needle = '''        test_template + {
+                'sources' : files('test-sysupdate-util.c'),
+                'import' : ['systemd-sysupdate'],
+                'conditions' : ['ENABLE_SYSUPDATE'],
+        },
+'''
+          addition = needle + '''        test_template + {
+                'sources' : files('test-sysupdate-transfer.c'),
+                'import' : ['systemd-sysupdate'],
+                'conditions' : ['ENABLE_SYSUPDATE'],
+        },
+'''
+          if "test-sysupdate-transfer.c" not in text:
+              if text.count(needle) != 1:
+                  raise SystemExit("sysupdate test meson anchor changed")
+              meson.write_text(text.replace(needle, addition, 1))
+          PY
+
+          cat >src/sysupdate/test-sysupdate-transfer.c <<'EOF'
+          /* SPDX-License-Identifier: LGPL-2.1-or-later */
+
+          #include "fileio.h"
+          #include "mkdir.h"
+          #include "path-util.h"
+          #include "rm-rf.h"
+          #include "string-util.h"
+          #include "sysupdate.h"
+          #include "sysupdate-transfer.h"
+          #include "tests.h"
+          #include "tmpfile-util.h"
+
+          static void test_path_reset(const char *section) {
+                  _cleanup_(rm_rf_physical_and_freep) char *tmp = NULL;
+                  _cleanup_(transfer_freep) Transfer *t = NULL;
+                  _cleanup_free_ char *definition = NULL, *dropin_dir = NULL, *dropin = NULL, *reset = NULL;
+                  Context context = {
+                          .installdb_fd = -1,
+                  };
+                  const char *dirs[2];
+
+                  ASSERT_OK(mkdtemp_malloc("/tmp/test-sysupdate-transfer-XXXXXX", &tmp));
+                  ASSERT_NOT_NULL(definition = path_join(tmp, "10-test.transfer"));
+                  ASSERT_NOT_NULL(dropin_dir = path_join(tmp, "10-test.transfer.d"));
+                  ASSERT_OK(mkdir_p(dropin_dir, 0755));
+                  ASSERT_NOT_NULL(dropin = path_join(dropin_dir, "10-reset.conf"));
+                  ASSERT_NOT_NULL(reset = strjoin("[", section, "]\nPath=\n"));
+
+                  ASSERT_OK(write_string_file(
+                                  definition,
+                                  "[Source]\n"
+                                  "Type=regular-file\n"
+                                  "Path=/source\n"
+                                  "MatchPattern=payload-@v.raw\n"
+                                  "\n"
+                                  "[Target]\n"
+                                  "Type=regular-file\n"
+                                  "Path=/target\n",
+                                  WRITE_STRING_FILE_CREATE));
+                  ASSERT_OK(write_string_file(dropin, reset, WRITE_STRING_FILE_CREATE));
+
+                  dirs[0] = tmp;
+                  dirs[1] = NULL;
+                  ASSERT_NOT_NULL(t = transfer_new(&context));
+                  ASSERT_ERROR(transfer_read_definition(t, definition, dirs, NULL), EINVAL);
+
+                  if (streq(section, "Source")) {
+                          ASSERT_NULL(t->source.path);
+                          ASSERT_FALSE(t->source.path_auto);
+                          ASSERT_STREQ(t->target.path, "/target");
+                  } else {
+                          ASSERT_STREQ(t->source.path, "/source");
+                          ASSERT_NULL(t->target.path);
+                          ASSERT_FALSE(t->target.path_auto);
+                  }
+          }
+
+          TEST(source_path_empty_dropin_resets) {
+                  test_path_reset("Source");
+          }
+
+          TEST(target_path_empty_dropin_resets) {
+                  test_path_reset("Target");
+          }
+
+          DEFINE_TEST_MAIN(LOG_INFO);
+          EOF
+
+          git diff --check
+
+      - name: Remove carrier and commit exact product fence
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -f \
+            .github/workflows/fieldwork-materialize-sysupdate-path-reset.yml \
+            .github/fieldwork-sysupdate-path-reset-trigger
+          git config user.name "linux-fieldwork-bot"
+          git config user.email "linux-fieldwork@example.invalid"
+          git add -A
+          mapfile -t changed < <(git diff --cached --name-only)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 3
+          for expected in \
+            src/sysupdate/meson.build \
+            src/sysupdate/sysupdate-transfer.c \
+            src/sysupdate/test-sysupdate-transfer.c; do
+            printf '%s\n' "${changed[@]}" | grep -Fx "$expected"
+          done
+          git commit -m "sysupdate: reset empty Path assignments"
+          git push origin HEAD:fieldwork/sysupdate-path-empty-reset
