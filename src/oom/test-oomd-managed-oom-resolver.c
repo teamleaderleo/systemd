@@ -236,18 +236,18 @@ TEST(forged_duplicate_typed_keys_are_rejected_before_authorization) {
         ASSERT_EQ(policy.n_entries, 0U);
 }
 
-TEST(failure_clears_a_prepopulated_output_batch) {
+TEST(failure_releases_a_prior_valid_output_batch) {
         _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch messages = {};
-        _cleanup_(oomd_managed_oom_policy_batch_donep) OomdManagedOOMPolicyBatch policy = {
-                .entries = UINT_TO_PTR(1),
-                .paths = UINT_TO_PTR(1),
-                .values = UINT_TO_PTR(1),
-                .n_entries = 1,
-        };
+        _cleanup_(oomd_managed_oom_policy_batch_donep) OomdManagedOOMPolicyBatch policy = {};
 
         ASSERT_OK(parse_text(
                           "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/a.slice\",\"property\":\"ManagedOOMSwap\"}]}",
                           &messages));
+        ASSERT_OK(oomd_managed_oom_policy_batch_resolve(
+                          &messages, system_authority, NULL, NULL, NULL, &policy));
+        ASSERT_EQ(policy.n_entries, 1U);
+        assert_se(policy.entries && policy.paths && policy.values);
+
         ASSERT_ERROR(oomd_managed_oom_policy_batch_resolve(
                              &messages, user_authority, NULL, NULL, NULL, &policy), EINVAL);
         ASSERT_EQ(policy.n_entries, 0U);
