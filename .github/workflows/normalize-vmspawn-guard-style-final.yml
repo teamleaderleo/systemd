@@ -53,7 +53,7 @@ jobs:
               ' ' * 16 + '}',
           ])
 
-          path.write_text(text[:start] + new + text[end:])
+          path.write_text(text[:start] + new + '\n' + text[end:])
           PY
 
           bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
@@ -70,5 +70,5 @@ jobs:
           git config user.name 'Linux Fieldwork'
           git config user.email 'fieldwork@example.invalid'
           git add src/vmspawn/vmspawn.c
-          git commit -m 'vmspawn: normalize optional user namespace guard'
+          git commit -m 'vmspawn: retain spacing after optional user namespace guard'
           git push origin HEAD:repair/vmspawn-unmapped-bind-userns-2dd0706
