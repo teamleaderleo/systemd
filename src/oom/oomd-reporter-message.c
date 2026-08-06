@@ -96,7 +96,9 @@ int oomd_reporter_message_parse(
 
         *ret = NULL;
 
-        r = sd_json_dispatch(parameters, parameters_dispatch_table, SD_JSON_STRICT, &raw_parameters);
+        /* Keep the existing method extensible: unknown fields are ignored, while every known field and
+         * every array element must still decode successfully before a message is returned. */
+        r = sd_json_dispatch(parameters, parameters_dispatch_table, 0, &raw_parameters);
         if (r < 0)
                 return r;
 
@@ -120,13 +122,13 @@ int oomd_reporter_message_parse(
                 _cleanup_free_ char *path = NULL;
                 sd_json_variant *element;
                 OomdPolicyProperty property;
-                bool has_duration, has_limit, has_rules, is_auto, is_kill;
+                bool is_auto, is_kill;
 
                 element = sd_json_variant_by_index(raw_parameters.cgroups, i);
                 if (!sd_json_variant_is_object(element))
                         return -EINVAL;
 
-                r = sd_json_dispatch(element, message_dispatch_table, SD_JSON_STRICT, &raw);
+                r = sd_json_dispatch(element, message_dispatch_table, 0, &raw);
                 if (r < 0)
                         return r;
 
@@ -151,10 +153,6 @@ int oomd_reporter_message_parse(
                         if (message->entries[j].property == property && streq(message->paths[j], path))
                                 return -EEXIST;
 
-                has_limit = sd_json_variant_by_key(element, "limit") != NULL;
-                has_duration = sd_json_variant_by_key(element, "duration") != NULL;
-                has_rules = sd_json_variant_by_key(element, "rules") != NULL;
-
                 message->paths[i] = TAKE_PTR(path);
                 message->entries[i] = (OomdPolicySnapshotEntry) {
                         .property = property,
@@ -163,29 +161,27 @@ int oomd_reporter_message_parse(
 
                 if (is_auto) {
                         /* The current manager sender may include configured pressure fields while changing
-                         * the mode to auto. Existing oomd semantics ignore those fields and withdraw the
-                         * property, so retain that wire compatibility while making the withdrawal explicit. */
+                         * the mode to auto. Existing oomd semantics ignore payload fields and withdraw the
+                         * property, so retain that wire compatibility explicitly. */
                         continue;
                 }
 
                 switch (property) {
                 case OOMD_POLICY_SWAP:
-                        if (has_limit || has_duration || has_rules)
-                                return -EINVAL;
+                        /* Current receive semantics ignore pressure and rules fields for swap. */
                         break;
 
                 case OOMD_POLICY_MEMORY_PRESSURE:
-                        if (has_rules)
-                                return -EINVAL;
-
+                        /* Rules are irrelevant for pressure policy and are intentionally normalized away. */
                         message->values[i].pressure_limit = raw.limit;
                         message->values[i].pressure_duration_usec = raw.duration;
                         break;
 
                 case OOMD_POLICY_RULES:
-                        if (has_limit || has_duration || strv_isempty(raw.rules))
+                        if (strv_isempty(raw.rules))
                                 return -EINVAL;
 
+                        /* Limit and duration are irrelevant for rules policy and are normalized away. */
                         strv_uniq(raw.rules);
                         message->values[i].rules = TAKE_PTR(raw.rules);
                         break;
