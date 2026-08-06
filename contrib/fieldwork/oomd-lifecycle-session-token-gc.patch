@@ -15,7 +15,13 @@ diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle
          size_t n_states;
 +        uint64_t last_generation;
  };
-@@ -76,3 +76,32 @@ static int ensure_state(
+@@ -67,11 +67,40 @@ static int ensure_state(
+         lifecycle->states = states;
+         state = lifecycle->states + lifecycle->n_states++;
+         *state = (OomdReporterLifecycleState) {
+                 .authority = authority,
+         };
+ 
          *ret = state;
          return 0;
  }
@@ -48,7 +54,9 @@ diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle
 +        assert(!state->pending_connected);
 +        remove_state(lifecycle, state);
 +}
-@@ -113,6 +141,7 @@ int oomd_reporter_lifecycle_begin(
+ 
+ OomdReporterLifecycle *oomd_reporter_lifecycle_free(OomdReporterLifecycle *lifecycle) {
+@@ -113,6 +142,7 @@ int oomd_reporter_lifecycle_begin(
                  OomdReporterSession *ret_session) {
  
          OomdReporterLifecycleState *state;
@@ -56,7 +64,7 @@ diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle
          int r;
  
          assert(lifecycle);
-@@ -123,13 +152,16 @@ int oomd_reporter_lifecycle_begin(
+@@ -123,13 +153,16 @@ int oomd_reporter_lifecycle_begin(
          if (!authority_valid(authority))
                  return -EINVAL;
  
@@ -76,7 +84,7 @@ diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle
          state->pending_connected = true;
          *ret_session = (OomdReporterSession) {
                  .authority = authority,
-@@ -269,6 +301,7 @@ int oomd_reporter_lifecycle_commit(
+@@ -269,6 +302,7 @@ int oomd_reporter_lifecycle_commit(
  
                  state->pending_generation = 0;
                  state->pending_connected = false;
@@ -84,7 +92,7 @@ diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle
                  return 0;
  
          case OOMD_REPORTER_LIFECYCLE_TRANSITION_DISCONNECT_ACTIVE:
-@@ -288,6 +321,7 @@ int oomd_reporter_lifecycle_commit(
+@@ -288,6 +322,7 @@ int oomd_reporter_lifecycle_commit(
                          state->active_generation = 0;
                          state->active_connected = false;
                  }
@@ -92,7 +100,7 @@ diff --git a/src/oom/oomd-reporter-lifecycle.c b/src/oom/oomd-reporter-lifecycle
                  return 0;
  
          case OOMD_REPORTER_LIFECYCLE_TRANSITION_EXPIRE_PENDING_GRACE:
-@@ -339,3 +373,9 @@ int oomd_reporter_lifecycle_accepts_incremental(
+@@ -339,3 +374,9 @@ int oomd_reporter_lifecycle_accepts_incremental(
                 state->active_connected &&
                 state->active_generation == session.generation;
  }
