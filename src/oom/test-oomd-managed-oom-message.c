@@ -195,10 +195,13 @@ TEST(kill_rules_require_a_nonempty_rules_list) {
 }
 
 TEST(parse_failure_clears_the_output_batch) {
-        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {
-                .items = UINT_TO_PTR(1),
-                .n_items = 1,
-        };
+        _cleanup_(oomd_managed_oom_message_batch_donep) OomdManagedOOMMessageBatch batch = {};
+
+        ASSERT_OK(parse_text(
+                          "{\"cgroups\":[{\"mode\":\"kill\",\"path\":\"/old.slice\",\"property\":\"ManagedOOMSwap\"}]}",
+                          &batch));
+        ASSERT_EQ(batch.n_items, 1U);
+        assert_se(batch.items);
 
         ASSERT_ERROR(parse_text("{\"cgroups\":[null]}", &batch), EINVAL);
         assert_se(!batch.items);
