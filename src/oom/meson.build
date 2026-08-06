@@ -14,6 +14,7 @@ systemd_oomd_export_sources = files(
         'oomd-policy.c',
         'oomd-reporter-adapter.c',
         'oomd-reporter-lifecycle.c',
+        'oomd-reporter-message.c',
         'oomd-reporter-registry.c',
         'oomd-util.c',
 )
@@ -63,6 +64,11 @@ executables += [
         },
         test_template + {
                 'sources' : files('test-oomd-reporter-batch.c'),
+                'import' : ['systemd-oomd'],
+                'dependencies' : libatomic,
+        },
+        test_template + {
+                'sources' : files('test-oomd-reporter-message.c'),
                 'import' : ['systemd-oomd'],
                 'dependencies' : libatomic,
         },
