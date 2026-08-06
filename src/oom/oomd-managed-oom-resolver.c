@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 
 #include <errno.h>
+#include <stdbool.h>
 
 #include "alloc-util.h"
 #include "oomd-managed-oom-resolver.h"
@@ -33,6 +34,43 @@ static bool defaults_valid(const OomdManagedOOMDefaults *defaults) {
                defaults->memory_pressure_duration_usec != USEC_INFINITY;
 }
 
+static int validate_message(const OomdManagedOOMMessageBatch *message) {
+        assert(message);
+        assert(message->items || message->n_items == 0);
+
+        for (size_t i = 0; i < message->n_items; i++) {
+                const OomdManagedOOMMessage *item = message->items + i;
+
+                if (!item->path || !path_is_absolute(item->path) || !path_is_normalized(item->path))
+                        return -EINVAL;
+                if (item->property < 0 || item->property >= _OOMD_POLICY_PROPERTY_MAX)
+                        return -EINVAL;
+                if (!IN_SET(item->mode, MANAGED_OOM_AUTO, MANAGED_OOM_KILL))
+                        return -EINVAL;
+                if (item->mode == MANAGED_OOM_KILL &&
+                    item->property == OOMD_POLICY_RULES &&
+                    strv_isempty(item->rules))
+                        return -EINVAL;
+
+                for (size_t j = 0; j < i; j++)
+                        if (same_message_key(message->items + j, item->property, item->path))
+                                return -EEXIST;
+        }
+
+        return 0;
+}
+
+static bool same_message_key(
+                const OomdManagedOOMMessage *a,
+                OomdPolicyProperty property,
+                const char *path) {
+
+        assert(a);
+        assert(path);
+
+        return a->property == property && streq(a->path, path);
+}
+
 static int authorize_message(
                 const OomdManagedOOMMessageBatch *message,
                 OomdReporterAuthority authority,
@@ -42,7 +80,7 @@ static int authorize_message(
         assert(message);
         assert(message->items || message->n_items == 0);
 
-        if (authority.kind == OOMD_REPORTER_SYSTEM_MANAGER)
+        if (authority.kind == OOMD_REPORTER_SYSTEM_MANAGER || message->n_items == 0)
                 return 0;
         if (!owner_lookup)
                 return -EINVAL;
@@ -96,6 +134,10 @@ int oomd_managed_oom_policy_batch_resolve(
         if (!authority_valid(authority) || !defaults_valid(defaults))
                 return -EINVAL;
 
+        r = validate_message(message);
+        if (r < 0)
+                return r;
+
         r = authorize_message(message, authority, owner_lookup, owner_userdata);
         if (r < 0)
                 return r;
@@ -115,13 +157,6 @@ int oomd_managed_oom_policy_batch_resolve(
                 _cleanup_free_ char *path = NULL;
                 size_t i = batch->n_entries;
                 bool withdrawal;
-
-                if (!path_is_absolute(item->path) || !path_is_normalized(item->path))
-                        return -EINVAL;
-                if (item->property < 0 || item->property >= _OOMD_POLICY_PROPERTY_MAX)
-                        return -EINVAL;
-                if (!IN_SET(item->mode, MANAGED_OOM_AUTO, MANAGED_OOM_KILL))
-                        return -EINVAL;
 
                 path = strdup(item->path);
                 if (!path)
@@ -143,8 +178,6 @@ int oomd_managed_oom_policy_batch_resolve(
                                 break;
 
                         case OOMD_POLICY_RULES:
-                                if (strv_isempty(item->rules))
-                                        return -EINVAL;
                                 value.rules = strv_copy(item->rules);
                                 if (!value.rules)
                                         return -ENOMEM;
