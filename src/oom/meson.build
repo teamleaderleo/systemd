@@ -12,6 +12,7 @@ systemd_oomd_sources = files(
 )
 systemd_oomd_export_sources = files(
         'oomd-managed-oom-message.c',
+        'oomd-managed-oom-resolver.c',
         'oomd-policy.c',
         'oomd-reporter-adapter.c',
         'oomd-reporter-lifecycle.c',
@@ -69,6 +70,11 @@ executables += [
         },
         test_template + {
                 'sources' : files('test-oomd-managed-oom-message.c'),
+                'import' : ['systemd-oomd'],
+                'dependencies' : libatomic,
+        },
+        test_template + {
+                'sources' : files('test-oomd-managed-oom-resolver.c'),
                 'import' : ['systemd-oomd'],
                 'dependencies' : libatomic,
         },
