@@ -15,7 +15,7 @@ jobs:
     if: >-
       github.repository == 'teamleaderleo/systemd' &&
       github.head_ref == 'automation/vmspawn-build-trigger'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 150
 
     steps:
@@ -27,6 +27,11 @@ jobs:
           persist-credentials: false
 
       - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Install host filesystem tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends btrfs-progs
 
       - name: Free disk space
         shell: bash
@@ -107,8 +112,8 @@ jobs:
             env \
             TEST_PREFER_QEMU=1 \
             TEST_NO_QEMU=0 \
-            TEST_NO_KVM=0 \
-            TEST_RUNNER=ubuntu-24.04 \
+            TEST_NO_KVM=1 \
+            TEST_RUNNER=ubuntu-22.04 \
             meson test \
             -C build \
             --timeout-multiplier=2 \
