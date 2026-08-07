@@ -1,7 +1,7 @@
 diff --git a/src/oom/oomd-reporter-adapter.c b/src/oom/oomd-reporter-adapter.c
 --- a/src/oom/oomd-reporter-adapter.c
 +++ b/src/oom/oomd-reporter-adapter.c
-@@ -73,6 +73,48 @@ static OomdReporterAuthorityState *find_authority(
+@@ -73,5 +73,52 @@ static OomdReporterAuthorityState *find_authority(
          return NULL;
  }
  
@@ -54,7 +54,7 @@ diff --git a/src/oom/oomd-reporter-adapter.c b/src/oom/oomd-reporter-adapter.c
 +
  static bool link_id_referenced(OomdReporterAdapter *adapter, OomdReporterLinkId link_id) {
          assert(adapter);
-@@ -308,6 +350,7 @@ int oomd_reporter_adapter_disconnect(
+@@ -308,10 +355,12 @@ int oomd_reporter_adapter_disconnect(
                  state->grace_armed = false;
                  state->grace_session = (OomdReporterSession) {};
                  remove_link(adapter, link_id);
@@ -67,14 +67,14 @@ diff --git a/src/oom/oomd-reporter-adapter.c b/src/oom/oomd-reporter-adapter.c
 +                collect_authority_if_dormant(adapter, state);
                  return 0;
          }
-@@ -319,6 +362,7 @@ int oomd_reporter_adapter_disconnect(
+@@ -319,5 +368,6 @@ int oomd_reporter_adapter_disconnect(
                  state->grace_armed = false;
                  state->grace_session = (OomdReporterSession) {};
                  remove_link(adapter, link_id);
 +                collect_authority_if_dormant(adapter, state);
                  return 0;
          }
-@@ -374,3 +418,9 @@ size_t oomd_reporter_adapter_size(OomdReporterAdapter *adapter) {
+@@ -374,3 +424,9 @@ size_t oomd_reporter_adapter_size(OomdReporterAdapter *adapter) {
  
          return oomd_reporter_registry_size(adapter->registry);
  }
@@ -97,7 +97,7 @@ diff --git a/src/oom/oomd-reporter-adapter.h b/src/oom/oomd-reporter-adapter.h
 diff --git a/src/oom/test-oomd-reporter-adapter-reuse.c b/src/oom/test-oomd-reporter-adapter-reuse.c
 --- a/src/oom/test-oomd-reporter-adapter-reuse.c
 +++ b/src/oom/test-oomd-reporter-adapter-reuse.c
-@@ -78,4 +78,80 @@ TEST(disconnected_active_id_remains_reserved_until_grace_resolves) {
+@@ -78,4 +78,79 @@ TEST(disconnected_active_id_remains_reserved_until_grace_resolves) {
          ASSERT_GT(reused.generation, active.generation);
  }
  
