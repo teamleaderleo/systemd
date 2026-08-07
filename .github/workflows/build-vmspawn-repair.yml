@@ -1,4 +1,4 @@
-name: Build vmspawn repair branch
+name: Runtime proof for vmspawn user bind
 
 on:
   pull_request:
@@ -11,46 +11,122 @@ permissions:
   contents: read
 
 jobs:
-  build-vmspawn:
+  vmspawn-runtime-proof:
     if: >-
       github.repository == 'teamleaderleo/systemd' &&
       github.head_ref == 'automation/vmspawn-build-trigger'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
 
     steps:
       - name: Check out repair branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: repair/vmspawn-unmapped-bind-userns-2dd0706
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate regression script
-        run: bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
 
-      - name: Install build dependencies
+      - name: Free disk space
         shell: bash
         run: |
           set -euxo pipefail
-          sudo add-apt-repository -y --no-update --enable-source
-          sudo apt-get update
-          sudo apt-get build-dep -y systemd
-          sudo apt-get install -y --no-install-recommends \
-            gcc g++ ninja-build python3-pip python3-jinja2
-          pip3 install --user -r .github/workflows/requirements.txt \
-            --require-hashes --break-system-packages || \
-          pip3 install --user -r .github/workflows/requirements.txt \
-            --require-hashes
-          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+          sudo mv /usr/local /usr/local.trash
+          sudo mv /opt/hostedtoolcache /opt/hostedtoolcache.trash
+          sudo systemd-run rm -rf /usr/local.trash /opt/hostedtoolcache.trash
 
-      - name: Configure and build systemd-vmspawn
+      - name: Prepare compressed build workspace
         shell: bash
         run: |
           set -euxo pipefail
-          meson setup build \
-            -Dmode=developer \
-            -Dtests=false \
-            -Dman=false \
-            -Dhtml=false
-          meson compile -C build systemd-vmspawn
-          build/systemd-vmspawn --version
+          truncate --size=100G btrfs.raw
+          mkfs.btrfs btrfs.raw
+          sudo mkdir -p /mnt/mkosi
+          LOOP="$(sudo losetup --find --show --direct-io=on btrfs.raw)"
+          rm -f btrfs.raw
+          sudo mount "$LOOP" /mnt/mkosi --options compress=zstd:1,user_subvol_rm_allowed,noatime,discard=async,space_cache=v2
+          sudo chown "$(id -u):$(id -g)" /mnt/mkosi
+          mkdir -p /mnt/mkosi/tmp
+          echo "TMPDIR=/mnt/mkosi/tmp" >>"$GITHUB_ENV"
+          ln -sf /mnt/mkosi/build build
+
+      - name: Configure Arch test image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat >mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Output]
+          Format=disk
+
+          [Build]
+          UseSubvolumes=yes
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          WorkspaceDirectory=$TMPDIR
+          PackageCacheDirectory=$TMPDIR/cache
+          Environment=
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+                  LLVM=0
+                  SYSEXT=1
+
+          [Runtime]
+          RAM=4G
+          EOF
+
+      - name: Build tools tree and test image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkosi --debug genkey
+          sudo mkosi -f box -- true
+          sudo mkosi box -- \
+            meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+          sudo mkosi box -- meson compile -C build mkosi
+
+      - name: Confirm focused integration target
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkosi box -- meson test -C build --list | grep -F 'TEST-87-AUX-UTILS-VM'
+
+      - name: Run TEST-87 guest-visible vmspawn bind proof
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo --preserve-env mkosi box -- \
+            env \
+            TEST_PREFER_QEMU=1 \
+            TEST_NO_QEMU=0 \
+            TEST_NO_KVM=0 \
+            TEST_RUNNER=ubuntu-24.04 \
+            meson test \
+            -C build \
+            --timeout-multiplier=2 \
+            --no-rebuild \
+            --setup=integration \
+            --suite=integration-tests \
+            --print-errorlogs \
+            --no-stdsplit \
+            --num-processes=1 \
+            TEST-87-AUX-UTILS-VM
+
+      - name: Retain focused logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vmspawn-user-bind-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/meson-logs/testlog.txt
+            build/test/journal/*.journal
+          if-no-files-found: warn
+          retention-days: 7
