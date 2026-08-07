@@ -1,0 +1,119 @@
+---
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Fieldwork OOMD adapter authority GC
+
+on:
+  push:
+    branches:
+      - linux-fieldwork/oomd-link-adapter-authority-gc
+  pull_request:
+    paths:
+      - ".github/workflows/fieldwork-oomd-link-adapter-authority-gc.yml"
+      - "contrib/fieldwork/oomd-link-adapter-authority-gc.patch"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  adapter-authority-gc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+
+      - name: Verify identity and apply candidate
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p fieldwork-evidence
+          {
+            echo "EXPECTED_HEAD=$EXPECTED_HEAD"
+            echo "ACTUAL_HEAD=$(git rev-parse HEAD)"
+            echo "BASE_ADAPTER_BLOB=$(git rev-parse HEAD:src/oom/oomd-reporter-adapter.c)"
+            echo "BASE_HEADER_BLOB=$(git rev-parse HEAD:src/oom/oomd-reporter-adapter.h)"
+            echo "BASE_REUSE_TEST_BLOB=$(git rev-parse HEAD:src/oom/test-oomd-reporter-adapter-reuse.c)"
+            echo "PATCH_BLOB=$(git rev-parse HEAD:contrib/fieldwork/oomd-link-adapter-authority-gc.patch)"
+            echo "PRODUCT_SOURCE_COMMITTED=false"
+            echo "MANAGER_INTEGRATION=false"
+            echo "EXTERNAL_CONTACT=false"
+          } | tee fieldwork-evidence/receipt.txt
+          git apply --check contrib/fieldwork/oomd-link-adapter-authority-gc.patch
+          git apply contrib/fieldwork/oomd-link-adapter-authority-gc.patch
+          git diff --check
+          git diff -- src/oom/oomd-reporter-adapter.c src/oom/oomd-reporter-adapter.h src/oom/test-oomd-reporter-adapter-reuse.c | tee fieldwork-evidence/applied.diff
+
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Configure Arch tools tree
+        run: |
+          tee mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Build]
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          Environment=
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+          EOF
+
+      - name: Build tools tree
+        run: sudo mkosi -f box -- true
+
+      - name: Configure Meson
+        run: |
+          sudo mkosi box -- meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+
+      - name: Compile adapter tests
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson compile -C build \
+            test-oomd-reporter-adapter \
+            test-oomd-reporter-adapter-reuse \
+            test-oomd-reporter-adapter-events \
+            |& tee fieldwork-evidence/compile.txt
+
+      - name: Run adapter tests
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson test -C build --no-rebuild --print-errorlogs \
+            test-oomd-reporter-adapter \
+            test-oomd-reporter-adapter-reuse \
+            test-oomd-reporter-adapter-events \
+            |& tee fieldwork-evidence/test.txt
+
+      - name: Record patched identities
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "PATCHED_ADAPTER_BLOB=$(git hash-object src/oom/oomd-reporter-adapter.c)"
+            echo "PATCHED_HEADER_BLOB=$(git hash-object src/oom/oomd-reporter-adapter.h)"
+            echo "PATCHED_REUSE_TEST_BLOB=$(git hash-object src/oom/test-oomd-reporter-adapter-reuse.c)"
+          } | tee -a fieldwork-evidence/receipt.txt
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-adapter-authority-gc-${{ github.run_id }}-${{ github.run_attempt }}
+          path: fieldwork-evidence
+          if-no-files-found: error
+          retention-days: 14

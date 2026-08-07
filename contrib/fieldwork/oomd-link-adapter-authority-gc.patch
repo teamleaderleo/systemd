@@ -1,0 +1,179 @@
+diff --git a/src/oom/oomd-reporter-adapter.c b/src/oom/oomd-reporter-adapter.c
+--- a/src/oom/oomd-reporter-adapter.c
++++ b/src/oom/oomd-reporter-adapter.c
+@@ -73,5 +73,52 @@ static OomdReporterAuthorityState *find_authority(
+         return NULL;
+ }
+ 
++static bool authority_has_links(
++                OomdReporterAdapter *adapter,
++                OomdReporterAuthority authority) {
++
++        assert(adapter);
++
++        FOREACH_ARRAY(link, adapter->links, adapter->n_links)
++                if (authority_equal(link->session.authority, authority))
++                        return true;
++
++        return false;
++}
++
++static void remove_authority(
++                OomdReporterAdapter *adapter,
++                OomdReporterAuthorityState *state) {
++
++        size_t i;
++
++        assert(adapter);
++        assert(state);
++        assert(state >= adapter->authorities);
++        assert(state < adapter->authorities + adapter->n_authorities);
++
++        i = (size_t) (state - adapter->authorities);
++        adapter->authorities[i] = adapter->authorities[--adapter->n_authorities];
++        if (adapter->n_authorities == 0)
++                adapter->authorities = mfree(adapter->authorities);
++}
++
++static void collect_authority_if_dormant(
++                OomdReporterAdapter *adapter,
++                OomdReporterAuthorityState *state) {
++
++        assert(adapter);
++        assert(state);
++
++        if (state->active_link_id != 0 ||
++            state->pending_link_id != 0 ||
++            state->active_connected ||
++            state->grace_armed ||
++            authority_has_links(adapter, state->authority))
++                return;
++
++        remove_authority(adapter, state);
++}
++
+ static bool link_id_referenced(OomdReporterAdapter *adapter, OomdReporterLinkId link_id) {
+         assert(adapter);
+@@ -308,10 +355,12 @@ int oomd_reporter_adapter_disconnect(
+                 state->grace_armed = false;
+                 state->grace_session = (OomdReporterSession) {};
+                 remove_link(adapter, link_id);
++                collect_authority_if_dormant(adapter, state);
+                 return 0;
+         }
+ 
+         if (!was_active) {
+                 remove_link(adapter, link_id);
++                collect_authority_if_dormant(adapter, state);
+                 return 0;
+         }
+@@ -319,5 +368,6 @@ int oomd_reporter_adapter_disconnect(
+                 state->grace_armed = false;
+                 state->grace_session = (OomdReporterSession) {};
+                 remove_link(adapter, link_id);
++                collect_authority_if_dormant(adapter, state);
+                 return 0;
+         }
+@@ -374,3 +424,9 @@ size_t oomd_reporter_adapter_size(OomdReporterAdapter *adapter) {
+ 
+         return oomd_reporter_registry_size(adapter->registry);
+ }
++
++size_t oomd_reporter_adapter_authority_size(OomdReporterAdapter *adapter) {
++        assert(adapter);
++
++        return adapter->n_authorities;
++}
+diff --git a/src/oom/oomd-reporter-adapter.h b/src/oom/oomd-reporter-adapter.h
+--- a/src/oom/oomd-reporter-adapter.h
++++ b/src/oom/oomd-reporter-adapter.h
+@@ -55,5 +55,6 @@ int oomd_reporter_adapter_get_effective(
+                 OomdPolicyDecision *ret);
+ 
+ size_t oomd_reporter_adapter_size(OomdReporterAdapter *adapter);
++size_t oomd_reporter_adapter_authority_size(OomdReporterAdapter *adapter);
+ 
+ DEFINE_TRIVIAL_CLEANUP_FUNC(OomdReporterAdapter*, oomd_reporter_adapter_free);
+diff --git a/src/oom/test-oomd-reporter-adapter-reuse.c b/src/oom/test-oomd-reporter-adapter-reuse.c
+--- a/src/oom/test-oomd-reporter-adapter-reuse.c
++++ b/src/oom/test-oomd-reporter-adapter-reuse.c
+@@ -78,4 +78,79 @@ TEST(disconnected_active_id_remains_reserved_until_grace_resolves) {
+         ASSERT_GT(reused.generation, active.generation);
+ }
+ 
++TEST(dormant_authority_records_are_collected) {
++        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
++        OomdReporterAdapterEvent event;
++        OomdReporterSession first, second;
++
++        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
++
++        ASSERT_OK(oomd_reporter_adapter_connect(
++                          adapter, 1, user_authority, &first, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 1U);
++        ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, 1, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 0U);
++
++        ASSERT_OK(oomd_reporter_adapter_connect(
++                          adapter, 1, user_authority, &second, &event));
++        ASSERT_GT(second.generation, first.generation);
++        activate_link(adapter, 1, 6000);
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 1U);
++        ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, 1, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 0U);
++}
++
++TEST(uid_churn_does_not_accumulate_adapter_authorities) {
++        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
++        OomdReporterAdapterEvent event;
++        OomdReporterSession session;
++
++        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
++
++        for (uint32_t uid = 1; uid <= 1000; uid++) {
++                OomdReporterAuthority authority = {
++                        .kind = OOMD_REPORTER_USER_MANAGER,
++                        .uid = uid,
++                };
++
++                ASSERT_OK(oomd_reporter_adapter_connect(
++                                  adapter, uid, authority, &session, &event));
++                ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 1U);
++                ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, uid, &event));
++                ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 0U);
++        }
++}
++
++TEST(authority_is_retained_while_grace_references_disconnected_active) {
++        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
++        OomdReporterAdapterEvent event;
++        OomdReporterSession active, pending;
++
++        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
++        ASSERT_OK(oomd_reporter_adapter_connect(adapter, 1, user_authority, &active, &event));
++        activate_link(adapter, 1, 7000);
++        ASSERT_OK(oomd_reporter_adapter_connect(adapter, 2, user_authority, &pending, &event));
++        ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, 1, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 1U);
++        ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, 2, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 0U);
++}
++
++TEST(superseded_pending_link_keeps_authority_until_last_disconnect) {
++        _cleanup_(oomd_reporter_adapter_freep) OomdReporterAdapter *adapter = NULL;
++        OomdReporterAdapterEvent event;
++        OomdReporterSession first, second;
++
++        ASSERT_OK(oomd_reporter_adapter_new(&adapter));
++        ASSERT_OK(oomd_reporter_adapter_connect(adapter, 1, user_authority, &first, &event));
++        ASSERT_OK(oomd_reporter_adapter_connect(adapter, 2, user_authority, &second, &event));
++        ASSERT_GT(second.generation, first.generation);
++
++        ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, 2, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 1U);
++
++        ASSERT_OK(oomd_reporter_adapter_disconnect(adapter, 1, &event));
++        ASSERT_EQ(oomd_reporter_adapter_authority_size(adapter), 0U);
++}
++
+ DEFINE_TEST_MAIN(LOG_DEBUG);
