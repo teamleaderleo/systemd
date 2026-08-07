@@ -1799,15 +1799,17 @@ static int start_virtiofsd(
         if (r == 0) {
                 /* Child */
 
-                r = namespace_enter(
-                                /* pidns_fd= */ -EBADF,
-                                /* mntns_fd= */ -EBADF,
-                                /* netns_fd= */ -EBADF,
-                                userns_fd,
-                                /* root_fd= */ -EBADF);
-                if (r < 0) {
-                        log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
-                        _exit(EXIT_FAILURE);
+                if (userns_fd >= 0) {
+                        r = namespace_enter(
+                                        /* pidns_fd= */ -EBADF,
+                                        /* mntns_fd= */ -EBADF,
+                                        /* netns_fd= */ -EBADF,
+                                        userns_fd,
+                                        /* root_fd= */ -EBADF);
+                        if (r < 0) {
+                                log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
+                                _exit(EXIT_FAILURE);
+                        }
                 }
 
                 if (userns_fd >= 0 && unshare(CLONE_NEWNS) < 0) {
