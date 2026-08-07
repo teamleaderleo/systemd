@@ -1,4 +1,4 @@
-name: Normalize vmspawn guard formatting only
+name: Compile logind VT release priority diagnostic
 
 on:
   pull_request:
@@ -8,74 +8,90 @@ on:
       - .github/vmspawn-style-trigger
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  normalize-style:
+  logind-vt-priority:
     if: >-
       github.repository == 'teamleaderleo/systemd' &&
       github.head_ref == 'automation/vmspawn-style-trigger'
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
+    timeout-minutes: 30
 
     steps:
-      - name: Check out repair branch
-        uses: actions/checkout@v4
+      - name: Check out current logind research branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: repair/vmspawn-unmapped-bind-userns-2dd0706
+          ref: research/logind-vt-release-race
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Normalize guarded namespace block
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('src/vmspawn/vmspawn.c')
-          text = path.read_text()
-          function_start = text.index('static int start_virtiofsd(')
-          child_start = text.index('                /* Child */', function_start)
-          start = text.index('                if (userns_fd >= 0) {', child_start)
-          end_marker = '\n                if (userns_fd >= 0 && unshare(CLONE_NEWNS) < 0) {'
-          end = text.index(end_marker, start)
-          old = text[start:end]
-
-          required = (
-              'r = namespace_enter(',
-              'Failed to enter user namespace for virtiofsd: %m',
-              '_exit(EXIT_FAILURE);',
-          )
-          missing = [item for item in required if item not in old]
-          if missing:
-              raise SystemExit(f'unexpected guarded namespace block; missing {missing!r}')
-
-          new = '''                if (userns_fd >= 0) {
-                        r = namespace_enter(
-                                        /* pidns_fd= */ -EBADF,
-                                        /* mntns_fd= */ -EBADF,
-                                        /* netns_fd= */ -EBADF,
-                                        userns_fd,
-                                        /* root_fd= */ -EBADF);
-                        if (r < 0) {
-                                log_error_errno(r, "Failed to enter user namespace for virtiofsd: %m");
-                                _exit(EXIT_FAILURE);
-                        }
-                }
-          '''.rstrip('\n')
-
-          path.write_text(text[:start] + new + text[end:])
-          PY
-
-          bash -n test/units/TEST-87-AUX-UTILS-VM.vmspawn-user-bind.sh
-          git diff --check
-
-      - name: Commit formatting correction
+      - name: Apply priority diagnostic
         shell: bash
         run: |
           set -euxo pipefail
-          git config user.name 'Linux Fieldwork'
-          git config user.email 'fieldwork@example.invalid'
-          git add src/vmspawn/vmspawn.c
-          git commit -m 'vmspawn: normalize optional user namespace guard'
-          git push origin HEAD:repair/vmspawn-unmapped-bind-userns-2dd0706
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/login/logind.c')
+          text = path.read_text()
+          old = '''        r = sd_event_add_signal(m->event, /* ret= */ NULL, (SIGRTMIN + 0) | SD_EVENT_SIGNAL_PROCMASK, manager_vt_switch, m);
+        if (r < 0)
+                return log_error_errno(r, "Failed to subscribe to SIGRTMIN+0 signal: %m");
+
+        return 0;
+'''
+          new = '''        _cleanup_(sd_event_source_unrefp) sd_event_source *vt_switch_source = NULL;
+        r = sd_event_add_signal(m->event, &vt_switch_source, (SIGRTMIN + 0) | SD_EVENT_SIGNAL_PROCMASK, manager_vt_switch, m);
+        if (r < 0)
+                return log_error_errno(r, "Failed to subscribe to SIGRTMIN+0 signal: %m");
+
+        r = sd_event_source_set_priority(vt_switch_source, SD_EVENT_PRIORITY_IMPORTANT);
+        if (r < 0)
+                return log_error_errno(r, "Failed to prioritize SIGRTMIN+0 signal source: %m");
+
+        r = sd_event_source_set_floating(vt_switch_source, true);
+        if (r < 0)
+                return log_error_errno(r, "Failed to make SIGRTMIN+0 signal source floating: %m");
+
+        return 0;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one manager_connect_console signal block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/login/logind.c
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo add-apt-repository -y --no-update --enable-source
+          sudo apt-get update
+          sudo apt-get build-dep -y systemd
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ ninja-build python3-pip python3-jinja2
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes --break-system-packages || \
+          pip3 install --user -r .github/workflows/requirements.txt \
+            --require-hashes
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Compile systemd-logind
+        shell: bash
+        run: |
+          set -euxo pipefail
+          meson setup build \
+            -Dmode=developer \
+            -Dtests=false \
+            -Dman=false \
+            -Dhtml=false
+          meson compile -C build systemd-logind
+          build/systemd-logind --help >/dev/null
+
+      - name: Verify research checkout stayed unmodified outside candidate
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git diff --name-only | grep -Fx 'src/login/logind.c'
