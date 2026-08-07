@@ -1,2 +1,3 @@
 research/logind-vt-release-race
 candidate=vt-release-priority-v1
+retry=1
