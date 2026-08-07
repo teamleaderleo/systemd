@@ -1,2 +1,2 @@
-repair/vmspawn-unmapped-bind-userns-2dd0706
-runner=ubuntu-22.04
+research/logind-vt-release-race
+candidate=vt-release-priority-v1
