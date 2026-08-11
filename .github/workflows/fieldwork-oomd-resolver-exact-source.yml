@@ -1,0 +1,144 @@
+---
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Fieldwork OOMD resolver exact source
+
+on:
+  pull_request:
+    branches:
+      - validation/oomd-resolver-base
+    paths:
+      - "src/oom/meson.build"
+      - "src/oom/oomd-managed-oom-resolver.c"
+      - "src/oom/oomd-managed-oom-resolver.h"
+      - "src/oom/test-oomd-managed-oom-resolver.c"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+  EVIDENCE_DIR: ${{ runner.temp }}/fieldwork-oomd-resolver-exact-source
+
+jobs:
+  resolver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact carrier head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+
+      - name: Verify execution and source identity
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object src/oom/meson.build)" = "aaabe1b50f0286c3ada6844fdad346651835a381"
+          test "$(git hash-object src/oom/oomd-managed-oom-resolver.c)" = "629863824c1dc1b8045391c2050c0109a104d8db"
+          test "$(git hash-object src/oom/oomd-managed-oom-resolver.h)" = "1d73823c39f2c71eea0842ea16ff56a61febb16f"
+          test "$(git hash-object src/oom/test-oomd-managed-oom-resolver.c)" = "91cca79cb7ede2f522d4ac6e724f5b134013440a"
+          mkdir -p "$EVIDENCE_DIR"
+          {
+            echo "CLEAN_SOURCE_COMMIT=5b4f57dd7b5c1d24cbcc9e2956751c0ca3c97511"
+            echo "CARRIER_HEAD=$(git rev-parse HEAD)"
+            echo "EXTERNAL_CONTACT=false"
+          } | tee "$EVIDENCE_DIR/identity.txt"
+
+      - uses: systemd/mkosi@f7762b71437227922a367bb89597843c77494ef9
+
+      - name: Configure Arch tools tree
+        run: |
+          tee mkosi/mkosi.local.conf <<EOF
+          [Distribution]
+          Distribution=arch
+          Release=rolling
+
+          [Build]
+          ToolsTreeDistribution=arch
+          ToolsTreeRelease=rolling
+          WithTests=yes
+          Environment=
+                  CFLAGS="-Og"
+                  MESON_OPTIONS=--werror
+          EOF
+
+      - name: Build tools tree
+        run: sudo mkosi -f box -- true
+
+      - name: Configure Meson
+        run: |
+          sudo mkosi box -- meson setup \
+            --buildtype=debugoptimized \
+            -Dbpf-framework=disabled \
+            build
+
+      - name: Compile resolver dependency chain
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson compile -C build \
+            test-oomd-policy \
+            test-oomd-reporter-lifecycle \
+            test-oomd-reporter-registry \
+            test-oomd-reporter-adapter \
+            test-oomd-reporter-adapter-reuse \
+            test-oomd-reporter-adapter-events \
+            test-oomd-reporter-batch \
+            test-oomd-managed-oom-message \
+            test-oomd-managed-oom-resolver \
+            |& tee "$EVIDENCE_DIR/compile.txt"
+
+      - name: Run resolver dependency chain
+        run: |
+          set -o pipefail
+          sudo mkosi box -- meson test -C build --no-rebuild --print-errorlogs \
+            test-oomd-policy \
+            test-oomd-reporter-lifecycle \
+            test-oomd-reporter-registry \
+            test-oomd-reporter-adapter \
+            test-oomd-reporter-adapter-reuse \
+            test-oomd-reporter-adapter-events \
+            test-oomd-reporter-batch \
+            test-oomd-managed-oom-message \
+            test-oomd-managed-oom-resolver \
+            |& tee "$EVIDENCE_DIR/test.txt"
+
+      - name: Verify clean worktree
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Record receipt
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          receipt = {
+              "schema_version": 1,
+              "clean_source_commit": "5b4f57dd7b5c1d24cbcc9e2956751c0ca3c97511",
+              "carrier_head": os.environ["EXPECTED_HEAD"],
+              "source_blob_identity_verified": True,
+              "resolver_dependency_chain": True,
+              "werror": True,
+              "external_contact": False,
+          }
+          out = Path(os.environ["EVIDENCE_DIR"])
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fieldwork-oomd-resolver-exact-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
